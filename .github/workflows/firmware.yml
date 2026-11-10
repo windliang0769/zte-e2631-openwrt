@@ -38,8 +38,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release
-          find "$E2631_TREE/bin/targets" -type f -name '*rax1800z*' \
+          find "$E2631_TREE/bin/targets" -type f -name '*rax1800*' \
             -exec cp {} release/ \;
+          ls -l "$E2631_TREE/bin/targets/sanechips/generic/" >> release/IMAGE-LIST.txt 2>/dev/null || true
           find "$E2631_OUT" -maxdepth 2 -name 'config-6.18' -exec cp {} release/rax1800z-kernel-config.txt \;
           {
             echo "Kit commit: $GITHUB_SHA"
