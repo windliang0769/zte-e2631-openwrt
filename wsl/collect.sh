@@ -19,9 +19,10 @@ cp "$B"/config-* "$OUTD"/ 2>/dev/null || true
 
 # The board .dtb on its own, so boot readiness is checked against the structure
 # the kernel actually sees rather than the .dts source.
-DTB=$(find "$SRC/build_dir" -maxdepth 6 -name 'image-zx279128s-zte-zxhn-e2631.dtb' | head -1)
+DTB=$(find "$SRC/build_dir" -maxdepth 6 -name 'image-zx279128r-cmcc-rax1800z.dtb' | head -1)
+test -n "$DTB" || DTB=$(find "$SRC/build_dir" -maxdepth 6 -name 'image-zx279128s-zte-zxhn-e2631.dtb' | head -1)
 test -n "$DTB" || { echo "no built board dtb found" >&2; exit 1; }
-cp "$DTB" "$OUTD/e2631.dtb"
+cp "$DTB" "$OUTD/rax1800z.dtb"
 
 # The kernel's merged .config. bin/targets carries no config-* in this tree and
 # the top-level .config hides the symbols only the target config file sets -
