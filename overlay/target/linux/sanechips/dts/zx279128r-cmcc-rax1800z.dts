@@ -56,6 +56,34 @@
 		device_type = "memory";
 		reg = <0x40000000 0x20000000>;
 	};
+
+	/*
+	 * Linux 6.18 denali_dt_probe() calls devm_clk_get_enabled() for THREE
+	 * NAMED clocks ("nand", "nand_x", "ecc") and derives the NAND timing
+	 * from their rates.  The stock DT only has one &topcrm 0x31 clock whose
+	 * ID space the mainline clock driver does not implement, and a missing
+	 * clock makes probe fail outright (not defer).  Three fixed-clocks keep
+	 * probe deterministic.  Rates are conservative starting values
+	 * (200 MHz core / 100 MHz bus / 200 MHz ECC); validate by comparing a
+	 * read of mtd0 against _dl/nand_backup/nand_full_128MiB.bin.
+	 */
+	nand_clk: nand-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
+
+	nand_x_clk: nand-x-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <100000000>;
+	};
+
+	nand_ecc_clk: nand-ecc-clk {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <200000000>;
+	};
 };
 
 /* The console UART - without this the kernel goes silent at "Starting kernel". */
@@ -68,14 +96,17 @@
 };
 
 /*
- * Parallel NAND via the standard mainline Denali DT driver.
- * Node copied verbatim from the stock vendor DT (only interrupt encoding is
- * spelled out; stock used raw cells <0 20 4> = GIC_SPI 20 level-high).
+ * Parallel NAND via the mainline Denali DT driver.
+ * Register addresses / IRQ / reg-names come from the stock vendor DT.
  *
- * clocks: stock referenced &topcrm 0x31.  The mainline topcrm driver has its
- * own clock-ID enum, so this may need to become the matching
- * ZX279128S_TOP_* constant, or a fixed-clock dummy, if the probe defers.
- * Left as a raw ID with the stock value to be adjusted at first boot.
+ * Linux 6.18 changes that matter here (measured on real hardware, v7):
+ *  - of_match_table no longer contains the generic "denali,denali-nand-dt";
+ *    patch 035 restores it with a ZTE .data entry.  Without it the device
+ *    never binds, and a forced bind hits WARN_ON(!data) -> -EINVAL.
+ *  - probe requires the three named clocks above; they are NOT optional.
+ *  - denali_dt_chip_init() walks every DIRECT child as a NAND chip and reads
+ *    its "reg" as the bank list, so fixed-partitions must live one level
+ *    deeper, inside a chip node.  A bare partitions child fails with -EINVAL.
  */
 &{/soc} {
 	nand@00d80000 {
@@ -83,14 +114,18 @@
 		reg = <0x00d80000 0x07c00000>, <0x00d00000 0x00080000>;
 		reg-names = "nand_data", "denali_reg";
 		interrupts = <0 20 4>;
-		/* stock DT referenced &topcrm 0x31, whose ID space the mainline
-		 * clock driver does not implement; denali_dt takes the clock
-		 * optionally, so run clock-less rather than deferred forever. */
+		clocks = <&nand_clk>, <&nand_x_clk>, <&nand_ecc_clk>;
+		clock-names = "nand", "nand_x", "ecc";
 		dma-mask = <0xffffffff>;
 		status = "okay";
 
 		#address-cells = <1>;
 		#size-cells = <1>;
+
+		nand@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <1>;
 
 		partitions {
 			compatible = "fixed-partitions";
@@ -171,29 +206,77 @@
 
 			/* 0x07800000-0x08000000 unpartitioned tail, all 0xFF */
 		};
+		};  /* nand@0 chip node */
 	};
 };
 
 /*
- * ETHERNET - the big unknown, deliberately shipped DISABLED for the first
- * boots.  The stock board uses a separate switch block sw@92300000
- * ("zte,zx279127-sw") plus four external PHY windows gephy128s@9b000000,
- * while the mainline dtsi models everything as one gmac@92000000 with five
- * ports.  Address ranges overlap (0x92000000+0x400000 covers both), so the
- * mainline gmac driver may well control the same silicon - but that has to
- * be proven on hardware with the serial console before we claim a network.
+ * ETHERNET.  v7 measured "zx279128s-eth 92000000.ethernet: error -ENODEV:
+ * no usable port": every gmac_portN ships status="disabled" in the SoC dtsi
+ * and the board DTS never enabled one, so the driver had nothing to register.
+ * Enable four ports the way the sibling E2631 board does; the fifth stays off.
  *
- * Plan: boot once with everything below "okay", check
- *   ls /sys/bus/mdio_bus/devices  and  dmesg | grep -i -e gmac -e phy
- * and adapt.  A board whose network does not work is still a working
- * OpenWrt box over serial + WiFi, so this does not block the port.
+ * RAX1800-Z uses an external switch block (sw@92300000, "zte,zx279127-sw")
+ * plus four gephy128s windows, so these MDIO addresses are a hypothesis.
+ * Verify on the next RAM boot with
+ *   ls /sys/bus/mdio_bus/devices ; dmesg | grep -i -e gmac -e phy ; ip link
+ * A board whose network does not work is still usable over serial + WiFi and
+ * this does not block the flash path.
  */
 &gmac {
 	status = "okay";
 };
 
+&gmac_port0 {
+	label = "lan3";
+	phy-handle = <&phy10>;
+	phy-mode = "internal";
+	status = "okay";
+};
+
+&gmac_port1 {
+	label = "lan2";
+	phy-handle = <&phy11>;
+	phy-mode = "internal";
+	status = "okay";
+};
+
+&gmac_port2 {
+	label = "lan1";
+	phy-handle = <&phy12>;
+	phy-mode = "internal";
+	status = "okay";
+};
+
+&gmac_port3 {
+	label = "wan";
+	phy-handle = <&phy13>;
+	phy-mode = "internal";
+	status = "okay";
+};
+
+&gmac_port4 {
+	status = "disabled";
+};
+
 &mdio {
 	status = "okay";
+
+	phy10: ethernet-phy@a {
+		reg = <10>;
+	};
+
+	phy11: ethernet-phy@b {
+		reg = <11>;
+	};
+
+	phy12: ethernet-phy@c {
+		reg = <12>;
+	};
+
+	phy13: ethernet-phy@d {
+		reg = <13>;
+	};
 };
 
 /* WiFi: MT7915 on PCIe (stock /kmodule/mt7915_ap.ko confirms the chip).

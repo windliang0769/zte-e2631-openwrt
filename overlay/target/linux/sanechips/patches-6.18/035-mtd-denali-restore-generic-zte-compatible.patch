@@ -1,0 +1,31 @@
+--- a/drivers/mtd/nand/raw/denali_dt.c
++++ b/drivers/mtd/nand/raw/denali_dt.c
+@@ -61,8 +61,28 @@
+ 	.ecc_caps = &denali_uniphier_v5b_ecc_caps,
+ };
+ 
++/*
++ * ZTE ZX279128S (CMCC RAX1800-Z): parallel SLC NAND behind the Denali IP.
++ * The vendor DT uses the historical generic "denali,denali-nand-dt"
++ * compatible, which mainline removed from the match table when per-SoC
++ * .data became mandatory.  Without this entry the device never binds, and a
++ * forced bind hits WARN_ON(!data) at line 127 and fails with -EINVAL.
++ * Start from the conservative socfpga parameters (2 KiB pages, 8-bit ECC per
++ * 512 B, 2 OOB skip bytes); verify against the full NAND dump on real hardware.
++ */
++NAND_ECC_CAPS_SINGLE(denali_zte_ecc_caps, denali_calc_ecc_bytes, 512, 8, 15);
++static const struct denali_dt_data denali_zte_data = {
++	.caps = DENALI_CAP_HW_ECC_FIXUP,
++	.oob_skip_bytes = 2,
++	.ecc_caps = &denali_zte_ecc_caps,
++};
++
+ static const struct of_device_id denali_nand_dt_ids[] = {
+ 	{
++		.compatible = "denali,denali-nand-dt",
++		.data = &denali_zte_data,
++	},
++	{
+ 		.compatible = "altr,socfpga-denali-nand",
+ 		.data = &denali_socfpga_data,
+ 	},
