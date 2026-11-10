@@ -83,8 +83,9 @@
 		reg = <0x00d80000 0x07c00000>, <0x00d00000 0x00080000>;
 		reg-names = "nand_data", "denali_reg";
 		interrupts = <0 20 4>;
-		clocks = <&topcrm 0x31>;
-		clock-names = "nand";
+		/* stock DT referenced &topcrm 0x31, whose ID space the mainline
+		 * clock driver does not implement; denali_dt takes the clock
+		 * optionally, so run clock-less rather than deferred forever. */
 		dma-mask = <0xffffffff>;
 		status = "okay";
 
@@ -199,14 +200,46 @@
  * The vendor wlan/caldata partition starts with 64 KiB of 0xFF, so mt76 will
  * have to fall back to OTP or a placeholder calibration - bring this up with
  * the serial console attached before trusting it. */
+/ {
+	soc {
+		/*
+		 * Second handle for the 0x94000000 block, same trick as the
+		 * E2631 port: the topcrm node is claimed by CLK_OF_DECLARE and
+		 * marked OF_POPULATED, so of_platform_bus_create refuses to
+		 * descend and none of its children (pcie phys, syscon-reboot)
+		 * ever become devices.  A syscon+simple-mfd duplicate lets the
+		 * bus walk populate them.  Addresses are identical - both
+		 * drivers find their regmap through the parent.
+		 */
+		crm1: syscon@94000000 {
+			compatible = "syscon", "simple-mfd";
+			reg = <0x94000000 0x1000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			crm1_pcie0_phy: phy@0 {
+				compatible = "zte,zx279128s-pcie-phy";
+				reg = <0>;
+				#phy-cells = <0>;
+			};
+
+			crm1_pcie1_phy: phy@1 {
+				compatible = "zte,zx279128s-pcie-phy";
+				reg = <1>;
+				#phy-cells = <0>;
+			};
+		};
+	};
+};
+
 &pcie0 {
-	phys = <&pcie0_phy>;
+	phys = <&crm1_pcie0_phy>;
 	phy-names = "pcie";
 	status = "okay";
 };
 
 &pcie1 {
-	phys = <&pcie1_phy>;
+	phys = <&crm1_pcie1_phy>;
 	phy-names = "pcie";
 	status = "okay";
 };
