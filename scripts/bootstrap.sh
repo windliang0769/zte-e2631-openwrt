@@ -70,14 +70,26 @@ for f in packages luci; do
 		git clone -q --depth 1 --single-branch "https://github.com/openwrt/$f" "$E2631_TREE/feeds/$f"
 	}
 	[ -f "$E2631_TREE/feeds/$f.index" ] || {
-		# The packages feed HEAD occasionally carries broken package Makefiles
-		# that abort the "Collecting package info" scan (2026-11-10 CI:/n		# pdns-recursor).  None of them are selected by this image, so drop
-		# the offenders before the scan runs.
-		if [ "$f" = packages ]; then
-			rm -rf "$E2631_TREE/feeds/packages/net/pdns-recursor"
-		fi
-		say "indexing feed $f"
-		( cd "$E2631_TREE" && ./scripts/feeds update "$f" 2>&1 | tail -3 )
+		# The feed HEAD drifts and occasionally carries broken package
+		# Makefiles that abort "Collecting package info" (seen live:
+		# pdns-recursor, then dufs).  None of them are selected by this
+		# image, so parse the failing package out of the scan log, drop it
+		# and retry, instead of hand-maintaining a blacklist.
+		i=0
+		while [ "$i" -lt 8 ]; do
+			i=$((i+1))
+			logf="$E2631_TREE/feeds-$f-scan.log"
+			if ( cd "$E2631_TREE" && ./scripts/feeds update "$f" ) >"$logf" 2>&1; then
+				say "feed $f indexed clean on scan $i"
+				break
+			fi
+			bad=$(sed -n -e 's|.* see logs/\(feeds/[^ ]*dump\.txt\).*|\1|p' "$logf" | head -1)
+			[ -n "$bad" ] || die "feed $f failed the scan for an unknown reason: $(tail -5 "$logf")"
+			bad="${bad%/dump.txt}"
+			say "dropping broken feed package: $bad"
+			rm -rf "$E2631_TREE/$bad"
+		done
+		[ "$i" -lt 8 ] || die "feed $f still failing after dropping 8 packages"
 	}
 done
 say "installing feed packages"
