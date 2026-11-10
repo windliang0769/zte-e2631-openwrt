@@ -70,6 +70,12 @@ for f in packages luci; do
 		git clone -q --depth 1 --single-branch "https://github.com/openwrt/$f" "$E2631_TREE/feeds/$f"
 	}
 	[ -f "$E2631_TREE/feeds/$f.index" ] || {
+		# The packages feed HEAD occasionally carries broken package Makefiles
+		# that abort the "Collecting package info" scan (2026-11-10 CI:/n		# pdns-recursor).  None of them are selected by this image, so drop
+		# the offenders before the scan runs.
+		if [ "$f" = packages ]; then
+			rm -rf "$E2631_TREE/feeds/packages/net/pdns-recursor"
+		fi
 		say "indexing feed $f"
 		( cd "$E2631_TREE" && ./scripts/feeds update "$f" 2>&1 | tail -3 )
 	}
