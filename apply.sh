@@ -220,8 +220,13 @@ sed -i -e "\|^$CMD_MARK\$|d" -e '/^CONFIG_CMDLINE_BOOL=y$/d' -e '/^CONFIG_CMDLIN
 	-e '/^CONFIG_CMDLINE=/d' "$CFG"
 printf '%s\n' "$CMD_MARK" \
 	'CONFIG_CMDLINE_BOOL=y' \
-	"CONFIG_CMDLINE=\"console=ttyAMA0,115200n8 earlycon root=/dev/mtdblock$ROOTDEV rootfstype=squashfs ro rootwait\"" \
-	'CONFIG_CMDLINE_FORCE=y' >> "$CFG"
+	"CONFIG_CMDLINE=\"console=ttyAMA0,115200n8 earlycon=pl011,mmio32,0x94404000 root=/dev/mtdblock$ROOTDEV rootfstype=squashfs ro rootwait\"" \
+	'CONFIG_CMDLINE_FORCE=y' \
+	'CONFIG_SERIAL_EARLYCON=y' >> "$CFG"
+# RAX1800Z: the earlycon= shorthand needs a DT stdout-path, which this
+# board DTS does not set.  Pass the PL011 physical address explicitly so
+# earlycon works without any driver, and print from the first printk on
+# - that is the only way to see where a silent boot dies.
 echo "kernel config: forced the OpenWrt command line, root on mtdblock$ROOTDEV, earlycon on"
 
 # RAX1800Z: parallel Denali NAND.  The stock board DT node carries the
