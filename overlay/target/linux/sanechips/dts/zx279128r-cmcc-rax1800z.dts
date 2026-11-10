@@ -1,0 +1,223 @@
+// SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
+/*
+ * CMCC RAX1800-Z (CMIT:2021AP99, 2021-10-10) on the Sanechips ZX279128R SoC.
+ *
+ * Everything below was read off the real hardware:
+ *  - register addresses / interrupt numbers / clock references come from the
+ *    STOCK vendor device tree, exported live over TTL from
+ *    /sys/firmware/devicetree/base (269 properties, see
+ *    _dl/nand_backup/analysis/devicetree.md in the working repo)
+ *  - the NAND node compatible "denali,denali-nand-dt" is the stock mainline
+ *    Denali DT binding, so no driver port is needed - only
+ *    CONFIG_MTD_NAND_DENALI(_DT) in the kernel config
+ *  - flash geometry measured from the dump: 128 MiB parallel SLC NAND,
+ *    2 KiB pages, 64 B OOB, 128 KiB erase blocks, ZERO bad blocks
+ *
+ * Differences vs the ZXHN H3600 / E2631 boards this base tree targets:
+ *  - 512 MiB DRAM (they have 256 MiB)
+ *  - PARALLEL Denali NAND instead of SPI-NAND via spifc
+ *  - 12 partitions, A/B slots at kernel0@0x200000/kernel1@0x700000
+ *  - external switch/PHY stack (sw@92300000 + gephy128s@9b000000) instead of
+ *    the SoC-internal 4 GbE PHYs - ethernet bring-up is the big unknown
+ *  - MT7915 (not MT7916) on PCIe; wlan/caldata partition starts all 0xFF
+ *
+ * Slot policy: OpenWrt owns slot A (kernel0 + rootfs0); slot B
+ * (kernel1 + rootfs1) stays STOCK and is the rollback path.  The U-Boot env
+ * decides which one boots, so B is never touched by any OpenWrt write.
+ */
+
+/dts-v1/;
+
+#include "zte/zx279128s.dtsi"
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	model = "CMCC RAX1800-Z";
+	compatible = "cmcc,rax1800-z", "zte,zx279128r", "zte,zx279128s";
+
+	aliases {
+		serial0 = &serial0;
+		ethernet0 = &gmac;
+	};
+
+	/*
+	 * The stock U-Boot passes its own bootargs (root=/dev/mtdblock6, the
+	 * vendor slot B rootfs).  CONFIG_CMDLINE_FORCE overrides them; the
+	 * chosen/bootargs line below is the belt to that suspenders.  ROOTDEV
+	 * counts partition ROWS in the fixed-partitions table below:
+	 * u-boot=0, u-boot-env=1, kernel=2, rootfs=3 -> /dev/mtdblock3.
+	 */
+	chosen {
+		bootargs = "console=ttyAMA0,115200n8 root=/dev/mtdblock3 rootfstype=squashfs ro rootwait";
+	};
+
+	/* stock DT: /memory@40000000 reg = <0x40000000 0x20000000> */
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x40000000 0x20000000>;
+	};
+};
+
+/* The console UART - without this the kernel goes silent at "Starting kernel". */
+&serial0 {
+	status = "okay";
+};
+
+&serial1 {
+	status = "okay";
+};
+
+/*
+ * Parallel NAND via the standard mainline Denali DT driver.
+ * Node copied verbatim from the stock vendor DT (only interrupt encoding is
+ * spelled out; stock used raw cells <0 20 4> = GIC_SPI 20 level-high).
+ *
+ * clocks: stock referenced &topcrm 0x31.  The mainline topcrm driver has its
+ * own clock-ID enum, so this may need to become the matching
+ * ZX279128S_TOP_* constant, or a fixed-clock dummy, if the probe defers.
+ * Left as a raw ID with the stock value to be adjusted at first boot.
+ */
+&{/soc} {
+	nand@00d80000 {
+		compatible = "denali,denali-nand-dt";
+		reg = <0x00d80000 0x07c00000>, <0x00d00000 0x00080000>;
+		reg-names = "nand_data", "denali_reg";
+		interrupts = <0 20 4>;
+		clocks = <&topcrm 0x31>;
+		clock-names = "nand";
+		dma-mask = <0xffffffff>;
+		status = "okay";
+
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+
+			/* 0x00000000-0x00180000: U-Boot code. NEVER write this. */
+			u_boot: partition@0 {
+				label = "u-boot";
+				reg = <0x00000000 0x00180000>;
+				read-only;
+			};
+
+			/* 0x00180000-0x001a0000: live U-Boot env (128 KiB, CRC-checked).
+			 * Kept writable so fw_setenv can switch the boot slot. */
+			u_boot_env: partition@180000 {
+				label = "u-boot-env";
+				reg = <0x00180000 0x00020000>;
+			};
+
+			/* ---- slot A: OpenWrt ---- */
+			partition@200000 {
+				label = "kernel";
+				reg = <0x00200000 0x00500000>;
+			};
+
+			/* squashfs lands here; erase blocks behind it become the
+			 * writable rootfs_data overlay (mainline squashfs-split). */
+			partition@c00000 {
+				label = "rootfs";
+				reg = <0x00c00000 0x02000000>;
+			};
+
+			/* ---- slot B: untouched stock system (rollback) ---- */
+			kernel1_b: partition@700000 {
+				label = "kernel1-stock";
+				reg = <0x00700000 0x00500000>;
+				read-only;
+			};
+
+			rootfs1_b: partition@2c00000 {
+				label = "rootfs1-stock";
+				reg = <0x02c00000 0x02000000>;
+				read-only;
+			};
+
+			/* ---- vendor data areas ---- */
+			partition@4c00000 {
+				label = "parameter-tags";
+				reg = <0x04c00000 0x00200000>;
+			};
+
+			partition@4e00000 {
+				label = "usercfg";
+				reg = <0x04e00000 0x00500000>;
+			};
+
+			/* BootPara lives in the first 72 bytes of this partition */
+			partition@5300000 {
+				label = "others";
+				reg = <0x05300000 0x00100000>;
+			};
+
+			partition@5400000 {
+				label = "wlan";
+				reg = <0x05400000 0x00300000>;
+			};
+
+			partition@5700000 {
+				label = "middleware";
+				reg = <0x05700000 0x00100000>;
+			};
+
+			partition@5800000 {
+				label = "versionbackup";
+				reg = <0x05800000 0x02000000>;
+			};
+
+			/* 0x07800000-0x08000000 unpartitioned tail, all 0xFF */
+		};
+	};
+};
+
+/*
+ * ETHERNET - the big unknown, deliberately shipped DISABLED for the first
+ * boots.  The stock board uses a separate switch block sw@92300000
+ * ("zte,zx279127-sw") plus four external PHY windows gephy128s@9b000000,
+ * while the mainline dtsi models everything as one gmac@92000000 with five
+ * ports.  Address ranges overlap (0x92000000+0x400000 covers both), so the
+ * mainline gmac driver may well control the same silicon - but that has to
+ * be proven on hardware with the serial console before we claim a network.
+ *
+ * Plan: boot once with everything below "okay", check
+ *   ls /sys/bus/mdio_bus/devices  and  dmesg | grep -i -e gmac -e phy
+ * and adapt.  A board whose network does not work is still a working
+ * OpenWrt box over serial + WiFi, so this does not block the port.
+ */
+&gmac {
+	status = "okay";
+};
+
+&mdio {
+	status = "okay";
+};
+
+/* WiFi: MT7915 on PCIe (stock /kmodule/mt7915_ap.ko confirms the chip).
+ * The vendor wlan/caldata partition starts with 64 KiB of 0xFF, so mt76 will
+ * have to fall back to OTP or a placeholder calibration - bring this up with
+ * the serial console attached before trusting it. */
+&pcie0 {
+	phys = <&pcie0_phy>;
+	phy-names = "pcie";
+	status = "okay";
+};
+
+&pcie1 {
+	phys = <&pcie1_phy>;
+	phy-names = "pcie";
+	status = "okay";
+};
+
+/* Stock kernel ships "# CONFIG_USB is not set"; keep USB off for the same
+ * hang-safety reason the E2631 port did. */
+&usb {
+	status = "disabled";
+};
+
+/* Serialize PL310 maintenance with protected MMIO, same as E2631. */
+&l2cc {
+	zte,l2c-io-read-lock;
+};

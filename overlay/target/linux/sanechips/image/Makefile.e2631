@@ -76,3 +76,25 @@ define Build/e2631-factory
 		--kernel $(IMAGE_KERNEL) --rootfs $(IMAGE_ROOTFS) \
 		--rootfs-at 0x400000 --header-at 0x1400000 --out $@
 endef
+
+
+# ------------------------------------------------------------------
+# CMCC RAX1800-Z (ZX279128R, parallel Denali NAND).  OpenWrt owns slot A
+# (kernel0@0x200000 + rootfs0@0xc00000); slot B stays stock and is the
+# rollback path - no image written by this definition ever touches it.
+# The stock U-Boot boots a plain legacy uImage and passes no DTB, so the
+# kernel is comp=0 with the DTB appended (CONFIG_ARM_APPENDED_DTB).
+define Device/cmcc_rax1800-z
+  DEVICE_VENDOR := CMCC
+  DEVICE_MODEL := RAX1800-Z
+  DEVICE_DTS := zx279128r-cmcc-rax1800z
+  DEVICE_DTS_DIR := $(TOPDIR)/target/linux/sanechips/dts
+  KERNEL_SIZE := 4992k
+  KERNEL := kernel-bin | append-dtb | uImage none | check-size $$(KERNEL_SIZE)
+  KERNEL_INITRAMFS := kernel-bin | append-dtb | uImage-ramboot
+  DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware uboot-envtools \
+	luci luci-i18n-base-zh-cn libustream-mbedtls
+  IMAGES := sysupgrade.bin
+  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+endef
+TARGET_DEVICES += cmcc_rax1800-z

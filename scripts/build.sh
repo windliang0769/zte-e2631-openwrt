@@ -28,8 +28,8 @@ NOPACK=0
 	die "no .config in $E2631_TREE - run: bash scripts/bootstrap.sh"
 grep -q 'Makefile.e2631' "$E2631_TREE/target/linux/sanechips/image/Makefile" ||
 	die "the overlay is not applied to $E2631_TREE - run: bash scripts/bootstrap.sh"
-grep -q '^CONFIG_TARGET_DEVICE_sanechips_generic_DEVICE_zte_zxhn-e2631=y' "$E2631_TREE/.config" ||
-	die "the E2631 device is not selected in $E2631_TREE/.config - the seed did not land"
+grep -q '^CONFIG_TARGET_DEVICE_sanechips_generic_DEVICE_cmcc_rax1800-z=y' "$E2631_TREE/.config" ||
+	die "the RAX1800Z device is not selected in $E2631_TREE/.config - the seed did not land"
 e2631_need_cmd make "run the build" || exit 1
 
 STAMP=$(date +%Y%m%d-%H%M%S)

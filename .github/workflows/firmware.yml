@@ -31,16 +31,16 @@ jobs:
         run: make bootstrap
       - name: Check board references against the base tree
         run: make check
-      - name: Build, package and verify firmware
-        run: make build
+      - name: Build firmware (no vendor pack - RAX1800Z flashes from U-Boot)
+        run: bash scripts/build.sh --no-pack
       - name: Prepare experimental release
         id: release
         run: |
           set -euo pipefail
           mkdir -p release
-          mapfile -t packages < <(find "$E2631_OUT" -maxdepth 1 -name 'e2631-openwrt-*.bin' -type f)
-          test "${#packages[@]}" -eq 1
-          cp "${packages[0]}" release/e2631-openwrt-experimental.bin
+          find "$E2631_TREE/bin/targets" -type f -name '*rax1800z*' \
+            -exec cp {} release/ \;
+          find "$E2631_OUT" -maxdepth 2 -name 'config-6.18' -exec cp {} release/rax1800z-kernel-config.txt \;
           {
             echo "Kit commit: $GITHUB_SHA"
             echo "Base commit: $(git -C "$E2631_TREE" rev-parse HEAD)"
@@ -49,18 +49,18 @@ jobs:
             echo "Run: https://github.com/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
             echo "Hardware tested: NO"
           } > release/SOURCE-INFO.txt
-          (cd release && sha256sum e2631-openwrt-experimental.bin SOURCE-INFO.txt > SHA256SUMS)
-          echo "tag=e2631-exp-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          (cd release && sha256sum * > SHA256SUMS)
+          echo "tag=rax1800z-exp-${GITHUB_RUN_NUMBER}-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
       - name: Publish only after all build and artifact gates pass
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           cat > "$RUNNER_TEMP/release-notes.md" <<'NOTES'
-          E2631 实验固件，仅适用于已核实硬件兼容性的 ZXHN E2631。
+          RAX1800Z 实验固件（CMCC RAX1800-Z / ZX279128R，仅串口试机用）。
 
           通过本次源码检查、完整编译与产物校验；**尚未真机验证，不是稳定版**。
-          已知问题：Wi-Fi 冷启动可能挂死（有自愈重试）；部分 SPI-NAND 批次不支持；
+          已知问题：网口与 WiFi 驱动均未真机验证；initramfs 镜像仅供 U-Boot TFTP 试跑；
           首次进入应立即设置 root 密码（首启为开放设置网络）。
           下载 `.bin` 前核对设备型号、闪存批次及恢复途径，再按 SHA256SUMS 校验。
           NOTES

@@ -196,7 +196,7 @@ done
 # counted from mtd0 because CONFIG_MTD_PARTITIONED_MASTER is off. Counted, not
 # remembered: a table edit that shifts the rows would otherwise bake a wrong
 # root= into the kernel and only show up on the device, after the flash.
-DTS="$TREE/target/linux/sanechips/dts/zx279128s-zte-zxhn-e2631.dts"
+DTS="$TREE/target/linux/sanechips/dts/zx279128r-cmcc-rax1800z.dts"
 ROOTDEV=$(awk '
 	/[[:space:]]partitions[[:space:]]*\{/ { p = 1 }
 	p {
@@ -223,6 +223,19 @@ printf '%s\n' "$CMD_MARK" \
 	"CONFIG_CMDLINE=\"console=ttyAMA0,115200n8 earlycon root=/dev/mtdblock$ROOTDEV rootfstype=squashfs ro rootwait\"" \
 	'CONFIG_CMDLINE_FORCE=y' >> "$CFG"
 echo "kernel config: forced the OpenWrt command line, root on mtdblock$ROOTDEV, earlycon on"
+
+# RAX1800Z: parallel Denali NAND.  The stock board DT node carries the
+# MAINLINE binding "denali,denali-nand-dt" (reg nand_data/denali_reg), so no
+# driver port is needed - but the base config only enables SPI-NAND, so the
+# raw NAND controller driver has to be switched on here.
+DENALI_MARK='# RAX1800Z: mainline Denali driver for the parallel NAND'
+sed -i -e "\|^$DENALI_MARK\$|d" -e '/^CONFIG_MTD_NAND_DENALI=y$/d' \
+	-e '/^CONFIG_MTD_NAND_DENALI_DT=y$/d' -e '/^CONFIG_MTD_SPLIT_SQUASHFS_ROOT=y$/d' "$CFG"
+printf '%s\n' "$DENALI_MARK" \
+	'CONFIG_MTD_NAND_DENALI=y' \
+	'CONFIG_MTD_NAND_DENALI_DT=y' \
+	'CONFIG_MTD_SPLIT_SQUASHFS_ROOT=y' >> "$CFG"
+echo "kernel config: enabled the Denali parallel NAND driver"
 
 # The MT7916 takes the whole board down without ever printing a line: no console
 # output, no ARP, and only a power cycle brings it back. That is indistinguishable
@@ -368,6 +381,7 @@ assert "base patch creating zte/zx279128s.dtsi present" \
 	bash -c "ls '$TREE'/target/linux/sanechips/patches-6.18/026-* >/dev/null 2>&1"
 assert "CONFIG_CMDLINE_FORCE written into the target config" grep -q '^CONFIG_CMDLINE_FORCE=y' "$CFG"
 assert "forced command line names a root device" grep -q '^CONFIG_CMDLINE=.*root=/dev/mtdblock' "$CFG"
+assert "Denali parallel NAND driver enabled" grep -q '^CONFIG_MTD_NAND_DENALI_DT=y$' "$CFG"
 assert "mt7915e autoload removed from the mt76 package" \
 	bash -c "test -f '$MT76' && ! grep -q 'AutoProbe,mt7915e' '$MT76'"
 assert "VFP/NEON/Thumbee disabled in the target config" \
