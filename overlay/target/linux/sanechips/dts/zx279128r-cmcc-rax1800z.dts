@@ -63,20 +63,30 @@
 	 * from their rates.  The stock DT only has one &topcrm 0x31 clock whose
 	 * ID space the mainline clock driver does not implement, and a missing
 	 * clock makes probe fail outright (not defer).  Three fixed-clocks keep
-	 * probe deterministic.  Rates are conservative starting values
-	 * (200 MHz core / 100 MHz bus / 200 MHz ECC); validate by comparing a
-	 * read of mtd0 against _dl/nand_backup/nand_full_128MiB.bin.
+	 * probe deterministic.
+	 *
+	 * Rates matter: denali_setup_data_interface() (drivers/mtd/nand/raw/
+	 * denali.c, ~line 791) rejects the probe with -EINVAL unless
+	 *   mult_x = clk_x_rate / clk_rate   is in [4, 6]
+	 * BEFORE it even issues READID.  An earlier 200/100 MHz pair gave
+	 * mult_x = 0.5 and produced "Failed to configure data interface" +
+	 * "No NAND device found".  50 MHz core / 200 MHz bus gives mult_x = 4.
+	 *
+	 * Verified on hardware (v8.1 RAM boot): S34ML01G2 128 MiB SLC detected,
+	 * 12 MTD partitions created, mtd0 read back byte-for-byte identical to
+	 * _dl/nand_backup/nand_full_128MiB.bin, and a 64-page dd read with no
+	 * ECC errors.  These are the exact values from that boot, not guesses.
 	 */
 	nand_clk: nand-clk {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <200000000>;
+		clock-frequency = <50000000>;
 	};
 
 	nand_x_clk: nand-x-clk {
 		compatible = "fixed-clock";
 		#clock-cells = <0>;
-		clock-frequency = <100000000>;
+		clock-frequency = <200000000>;
 	};
 
 	nand_ecc_clk: nand-ecc-clk {
