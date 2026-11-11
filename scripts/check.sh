@@ -58,6 +58,16 @@ g_temp_driver() {
 	grep -q 'temp@94100034' "$d" || { echo "DTS: temp node missing"; bad=1; }
 	grep -q '^CONFIG_PACKAGE_kmod-rax1800z-thermal=y' "$s" || { echo "seed: kmod not selected"; bad=1; }
 	grep -q 'kmod-rax1800z-thermal' "$i" || { echo "image: kmod missing from DEVICE_PACKAGES"; bad=1; }
+	# The MT7915D calibration is baked into the image: the runtime jffs2
+	# extraction from the wlan partition fails on this hardware (mainline
+	# Denali ECC mismatches the pages written by the OEM, so the extracted
+	# file reads back garbled). See 11-mt76-caldata for the full story.
+	local eeprom=$root/target/linux/sanechips/base-files/lib/firmware/mediatek/mt7915_eeprom.bin
+	[ -f "$eeprom" ] || { echo "wifi: baked mt7915_eeprom.bin missing"; bad=1; }
+	[ "$(head -c 2 "$eeprom" 2>/dev/null | od -An -tx1 | tr -d ' \n')" = "1579" ] ||
+		{ echo "wifi: baked eeprom chip id is not 0x7915"; bad=1; }
+	[ "$(wc -c < "$eeprom" 2>/dev/null)" -ge 3584 ] ||
+		{ echo "wifi: baked eeprom smaller than MT7915_EEPROM_SIZE (3584)"; bad=1; }
 	return "$bad"
 }
 

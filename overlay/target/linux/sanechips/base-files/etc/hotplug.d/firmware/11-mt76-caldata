@@ -55,6 +55,16 @@ zte_caldata_from_jffs2() {
 # INDEX0_EEPROM_size=0xEC2 in l1profile_7915_dual.dat).  The driver memcpy()s
 # MT7915_EEPROM_SIZE (3584 = 0xE00) bytes out of it (mt7915/mt7915.h), so
 # handing exactly that is both sufficient and what the driver consumes.
+#
+# 2026-11-11, on-hardware finding: this runtime path DOES NOT WORK on this
+# unit - the wlan partition's written pages fail mainline-Denali ECC checks
+# wholesale (jffs2 reports "wrong data CRC" on nearly every node: the data
+# read back does not match the CRCs stored by whatever wrote the partition),
+# so the extracted file reads back garbled and the chip-id check sees an
+# empty id.  The calibration file is therefore BAKED into the image instead
+# (base-files/lib/firmware/mediatek/mt7915_eeprom.bin + the _dbdc name, both
+# copied verbatim from the offline dump) - wifi-on skips this hook entirely
+# when those files already exist.  This path stays as a fallback only.
 rax1800z_caldata_from_jffs2() {
 	local part dir=/tmp/wifi-caldata id
 
