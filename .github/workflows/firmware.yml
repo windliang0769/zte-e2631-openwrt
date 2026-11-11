@@ -23,8 +23,52 @@ jobs:
           node-version: '22.16.0'
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential clang flex bison g++ gawk gcc-multilib gettext git libncurses-dev libssl-dev python3 python3-setuptools rsync swig unzip zlib1g-dev file wget curl busybox libelf-dev xsltproc
+          set -euo pipefail
+          # ubuntu-24.04 runners point apt at the Azure-internal mirror
+          # azure.archive.ubuntu.com via mirror+file:/etc/apt/apt-mirrors.txt.
+          # Runs #21 and #22 both died here: 62x "Temporary failure resolving
+          # 'azure.archive.ubuntu.com'" (apt exit 100), while
+          # packages.microsoft.com and github.com resolved fine. That is a
+          # runner-side DNS failure for the Azure-internal name only, NOT a
+          # source or firmware problem. Rewrite apt to public Ubuntu hosts and
+          # retry, so a flaky Azure DNS can never block the build again.
+          echo "::group::apt DNS preflight"
+          for h in azure.archive.ubuntu.com archive.ubuntu.com security.ubuntu.com; do
+            if timeout 8 getent ahosts "$h" >/dev/null 2>&1; then
+              echo "  $h -> resolvable"
+            else
+              echo "  $h -> UNRESOLVABLE"
+            fi
+          done
+          echo "::endgroup::"
+          # If even the public Ubuntu hosts do not resolve, keep the runner's
+          # own resolver as fallback but prepend a public one first.
+          if ! timeout 8 getent ahosts archive.ubuntu.com >/dev/null 2>&1; then
+            echo "prepending a public resolver (runner DNS cannot resolve Ubuntu mirrors)"
+            sudo sh -c '{ printf "%s\n" "nameserver 8.8.8.8"; cat /etc/resolv.conf; } > /etc/resolv.conf.new && mv /etc/resolv.conf.new /etc/resolv.conf'
+          fi
+          # Drop the unreachable Azure-internal host and stop the deb822
+          # sources from using the mirror+file indirection altogether.
+          sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' /etc/apt/apt-mirrors.txt || true
+          for f in /etc/apt/sources.list.d/*.sources; do
+            [ -f "$f" ] || continue
+            sudo sed -i 's|mirror+file:/etc/apt/apt-mirrors.txt|http://archive.ubuntu.com/ubuntu/|g' "$f"
+          done
+          echo "--- apt sources after rewrite ---"
+          cat /etc/apt/apt-mirrors.txt || true
+          cat /etc/apt/sources.list.d/ubuntu.sources || true
+          APT_OPTS="-o Acquire::Retries=10 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30"
+          ok=0
+          for attempt in 1 2 3; do
+            echo "apt-get update attempt $attempt"
+            if sudo apt-get $APT_OPTS update; then ok=1; break; fi
+            sleep 10
+          done
+          [ "$ok" = 1 ] || { echo "::error::apt-get update failed after 3 attempts"; exit 1; }
+          sudo apt-get $APT_OPTS install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib gettext git \
+            libncurses-dev libssl-dev python3 python3-setuptools rsync swig unzip \
+            zlib1g-dev file wget curl busybox libelf-dev xsltproc
       - name: Check source before building
         run: make check
       - name: Bootstrap pinned OpenWrt base
