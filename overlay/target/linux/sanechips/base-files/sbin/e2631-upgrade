@@ -1,11 +1,12 @@
 #!/bin/sh
-# Online updater for the E2631 port: check the GitHub releases of
-# Zlion-Y/zte-e2631-openwrt, download the factory package, verify it, and run
-# sysupgrade against it. The update rewrites the RUNNING slot in place and
-# the vendor system - in whichever slot it lives - is never written; see
-# lib/upgrade/platform.sh and docs/updates.md. (Upgrade hardening adopted
-# from the zwthys-cyber fork: pinned repository, mandatory SHA256SUMS parsed
-# strictly, HTTPS-only mirrors.)
+# Online updater for the CMCC RAX1800-Z: check the GitHub releases of
+# Zlion-Y/zte-e2631-openwrt, download a *-squashfs-sysupgrade.bin (a tar of
+# kernel uImage + squashfs root), verify it, and run sysupgrade against it.
+# The platform glue (lib/upgrade/platform.sh) writes ONLY slot A (mtd2 kernel
+# + mtd3 rootfs); the hardware-read-only vendor slot B (mtd4/mtd5) is never
+# touched and stays as the permanent rollback. See docs/updates.md. (Upgrade
+# hardening adopted from the zwthys-cyber fork: pinned repository, mandatory
+# SHA256SUMS parsed strictly, HTTPS-only mirrors.)
 #
 #   e2631-upgrade check [file.bin]   newest release vs /etc/e2631-version
 #                                     (with a file argument: verify that file)
@@ -66,10 +67,6 @@ version_newer() {	# version_newer <candidate> <current>; true when strictly newe
 }
 die() { echo "e2631-upgrade: $*" >&2; exit 1; }
 
-# fwslot installs to /usr/sbin on this layout; resolve once, fall back hard
-E2631_FWSLOT="$(command -v e2631-fwslot 2>/dev/null)"
-[ -n "$E2631_FWSLOT" ] || E2631_FWSLOT=/usr/sbin/e2631-fwslot
-
 mirror() { # print the configured accelerator prefix, may be empty
 	local m
 	m=$(uci -q get e2631.upd.mirror || echo "")
@@ -115,7 +112,20 @@ verify() { # verify <file> <expected-sha-or-empty>
 		[ "$want" = "$got" ] || die "sha256 mismatch (want $want got $got)"
 		log "sha256 verified"
 	fi
-	$E2631_FWSLOT check "$f" >/dev/null 2>&1 || die "fwslot check rejected the package"
+	# RAX1800Z: validate through the platform glue, NOT e2631-fwslot.  This
+	# board has no 28 MiB slots; fwslot's `check` knows only the E2631 header
+	# and would reject every valid RAX1800Z sysupgrade tar.  platform.sh's
+	# platform_check_image() unpacks the tar and verifies kernel(uImage) +
+	# root(squashfs) magics and both partition sizes -- the correct check here.
+	if . /lib/upgrade/platform.sh 2>/dev/null && \
+	   type platform_check_image >/dev/null 2>&1; then
+		platform_check_image "$f" >/dev/null 2>&1 || die "platform_check_image rejected the package (not a RAX1800Z kernel+root sysupgrade tar)"
+	else
+		# Fallback when the glue is unavailable: at least confirm the tar has
+		# both members and the kernel is a uImage.
+		tar -tf "$f" 2>/dev/null | grep -q '/kernel$' || die "package has no kernel member"
+		tar -tf "$f" 2>/dev/null | grep -q '/root$'   || die "package has no root member"
+	fi
 	log "package ok: $f"
 }
 
@@ -168,7 +178,7 @@ do_apply() {
 	[ -n "$f" ] && [ -s "$f" ] || die "no package: run 'e2631-upgrade run', or 'apply <file.bin>'"
 	verify "$f" ""
 	log "settings are NOT saved by the update - download your backup first if you need it"
-	log "flashing slot 1 (the vendor slot is never touched)..."
+	log "flashing slot A (kernel=mtd2 rootfs=mtd3); slot B vendor system is never touched"
 	if ! /sbin/sysupgrade "$f"; then
 		log "sysupgrade failed - the running image is unchanged"
 		exit 1

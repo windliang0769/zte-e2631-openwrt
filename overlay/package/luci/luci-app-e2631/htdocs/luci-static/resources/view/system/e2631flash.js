@@ -78,13 +78,9 @@ const callE2631Slots = rpc.declare({
 	object: 'e2631', method: 'slots', expect: { '': {} }
 });
 
-const callE2631Switch = rpc.declare({
-	object: 'e2631', method: 'switch', params: ['confirm'], expect: { '': {} }
-});
-
-const callSystemReboot = rpc.declare({
-	object: 'system', method: 'reboot', expect: { '': {} }
-});
+// NOTE: no `switch` action is declared here on purpose.  RAX1800Z has no
+// software slot-flip (slot B is hardware read-only); the rpcd `switch` method
+// is retained only to answer direct callers with an explicit refusal.
 
 return view.extend({
 	load() {
@@ -544,7 +540,7 @@ return view.extend({
 			'click': function(ev) {
 				ui.showModal('在线升级', [
 					E('p', {},
-						'将下载最新版固件、校验后刷入 OpenWrt 所在槽位并重启（原厂系统不受影响）。' + '<br>' +
+						'将下载最新版固件并校验 SHA256，然后只写入槽位 A（mtd2 kernel + mtd3 rootfs），写后逐区回读校验通过才重启；硬件只读的槽位 B 原厂系统永不触碰。' + '<br>' +
 						'升级不保留设置：需要保留配置请先在"备份"页生成并下载备份档案，升级后再上传恢复。'),
 					E('div', { 'class': 'right' }, [
 						E('button', { 'class': 'btn', 'click': ui.hideModal }, '取消'),
@@ -596,90 +592,49 @@ return view.extend({
 				'style': 'white-space:pre-wrap;background:rgba(128,128,128,.1);padding:.5em;margin-top:.5em;font-size:small;min-height:2em'
 			}, ''),
 			E('p', { 'style': 'font-size:small' },
-				'升级只写 OpenWrt 所在槽位，原厂系统槽不会被触碰；升级失败自动回落原厂。命令行等价：e2631-upgrade run')
+				'升级只写槽位 A（mtd2 kernel + mtd3 rootfs），硬件只读的槽位 B 原厂系统永不触碰；写后逐区回读校验通过才重启。命令行等价：e2631-upgrade run')
 		]);
 	},
 
 	renderE2631Slots: function() {
-		var self = this;
-
-		var switchBtn = E('button', {
-			'class': 'btn cbi-button-negative important',
-			'click': function(ev) {
-				ui.showModal('切回原厂系统', [
-					E('p', {},
-						'将把启动选择切到另一个槽（原厂系统）并重启。' + '<br>' +
-						'e2631-fwslot 会先校验目标槽的 CRC，校验不过不会切换。' + '<br>' +
-						'OpenWrt 所在槽不会被写入；之后可再次用原厂页面的 supgrade.html 刷回。'),
-					E('div', { 'class': 'right' }, [
-						E('button', { 'class': 'btn', 'click': ui.hideModal }, '取消'),
-						' ',
-						E('button', {
-							'class': 'btn cbi-button-negative important',
-							'click': function() {
-								ui.showModal('正在切换…', [ E('p', {}, 'e2631-fwslot switch 运行中，请稍候') ]);
-								callE2631Switch('yes').then(function(ret) {
-									var ok = ret && ret.ok;
-									ui.showModal(ok ? '切换成功，即将重启' : '切换失败', [
-										E('pre', { 'style': 'white-space:pre-wrap;font-size:small' },
-											(ret && ret.output) || JSON.stringify(ret)),
-										ok ? E('p', { 'id': 'e2631-count' }, '10') : E('div')
-									]);
-									if (ok) {
-										var n = 10;
-										var t = setInterval(function() {
-											n--;
-											var el = document.getElementById('e2631-count');
-											if (el) el.textContent = String(n);
-											if (n <= 0) { clearInterval(t); callSystemReboot(); }
-										}, 1000);
-									}
-								}).catch(function(e) {
-									ui.hideModal();
-									ui.addNotification(null,
-										E('p', {}, '切换失败：' + (e.message || e)), 'error');
-								});
-							}
-						}, '确认切换并重启')
-					])
-				]);
-			}
-		}, '切回原厂系统…');
-
+		// RAX1800Z: this board has no E2631-style 28 MiB slots and no software
+		// slot switch.  OpenWrt lives in the two writable partitions mtd2+mtd3
+		// (slot A); the vendor fallback mtd4+mtd5 (slot B) is HARDWARE read-only
+		// and is kept untouched as the permanent rollback.  U-Boot picks which
+		// kernel to load from the BootPara BootImageNum field in mtd8.
 		var tbl = E('table', { 'class': 'table' }, [
 			E('tr', { 'class': 'tr table-titles' }, [
-				E('th', { 'class': 'th' }, '槽位'),
-				E('th', { 'class': 'th' }, '版本 / 状态')
+				E('th', { 'class': 'th' }, '分区'),
+				E('th', { 'class': 'th' }, '用途 / 状态')
+			]),
+			E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td' }, 'mtd2 kernel + mtd3 rootfs'),
+				E('td', { 'class': 'td' }, '槽位 A — OpenWrt 运行区（可写，升级目标）')
+			]),
+			E('tr', { 'class': 'tr' }, [
+				E('td', { 'class': 'td' }, 'mtd4 kernel1-stock + mtd5 rootfs1-stock'),
+				E('td', { 'class': 'td' }, '槽位 B — 原厂系统（硬件只读，永久兜底，永不写入）')
 			])
 		]);
 
+		var bootp = E('p', { 'style': 'font-size:small' }, '正在读取启动指针…');
 		callE2631Slots().then(function(d) {
-			(d && Array.isArray(d.slots) ? d.slots : []).forEach(function(sl) {
-				var name = '槽位 ' + sl.slot;
-				if (d.running == sl.slot)
-					name += ' — 运行中';
-				else if (d.next == sl.slot)
-					name += ' — 下次启动';
-				var desc = sl.valid
-					? (sl.version || '?') + (sl.build ? ' · 构建 ' + sl.build : '') + ' · 序号 ' + (sl.serial >>> 0)
-					: '无有效版本头';
-				if (sl.damage)
-					desc += ' · 损坏：' + sl.damage;
-				tbl.appendChild(E('tr', { 'class': 'tr' }, [
-					E('td', { 'class': 'td' }, name),
-					E('td', { 'class': 'td' }, desc)
-				]));
-			});
+			var n = d && d.next;
+			bootp.textContent = '当前启动指针 BootPara BootImageNum = ' +
+				(n === 0 || n === 1 ? n : '?') +
+				'（0 = 槽位 A / OpenWrt，1 = 槽位 B / 原厂）';
 		}).catch(function() {
-			tbl.appendChild(E('tr', { 'class': 'tr' }, [
-				E('td', { 'class': 'td', 'colspan': 2 }, '读取失败：e2631-fwslot info')
-			]));
+			bootp.textContent = '启动指针读取失败（不影响升级）';
 		});
 
 		return E('div', { 'class': 'cbi-section' }, [
-			E('h3', {}, '固件槽位（A/B）'),
+			E('h3', {}, '固件分区（A/B）'),
 			tbl,
-			E('div', { 'style': 'margin-top:1em' }, [ switchBtn ])
+			E('div', { 'style': 'margin-top:1em' }, [ bootp ]),
+			E('p', { 'style': 'font-size:small;color:#a33' },
+				'本板不支持网页“一键切回原厂”：B 槽为硬件只读兜底。' +
+				'如需引导原厂系统，请在 U-Boot/TTL 下把 mtd8 的 BootPara BootImageNum 设为 1。' +
+				'日常升级请用上方“Flash image”，它只写槽位 A，B 槽原封不动。')
 		]);
 	},
 

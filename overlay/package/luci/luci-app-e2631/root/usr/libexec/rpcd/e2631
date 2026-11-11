@@ -6,16 +6,17 @@
 #   ubus call e2631 <m>    -> $1="call" $2=<m>: print the JSON response
 #
 # Methods:
-#   slots            both firmware slots (straight from fwslot info -j)
+#   slots            report the RAX1800Z A/B partition state (mtd labels)
 #   check            online update check (e2631-upgrade check output as log)
-#   switch           flip the boot to the OTHER (stock) slot; needs confirm
+#   switch           NOT SUPPORTED on this board: slot B is hardware read-only
+#                    and there are no E2631-style 28 MiB slots to flip
 #   run              one-click online upgrade, detached; needs confirm
 #
-# fwslot lives in /usr/sbin on this layout (package default), not /sbin:
-# resolve instead of assuming, or the board page shows a read failure.
-
-FW="$(command -v e2631-fwslot 2>/dev/null)"
-[ -n "$FW" ] || FW=/usr/sbin/e2631-fwslot
+# RAX1800Z note: the upstream E2631 `e2631-fwslot` tool cannot map this
+# board's split partitions (kernel/rootfs vs kernel1-stock/rootfs1-stock),
+# so `fwslot info` returned "running slot: -1" and `fwslot switch` refused.
+# We never call it here.  Upgrades go through /sbin/sysupgrade -> the
+# RAX1800Z /lib/upgrade/platform.sh, which writes mtd2/mtd3 directly.
 
 esc() { # escape a command's output into a JSON string value
 	"$@" 2>&1 | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{printf "%s\\n", $0}'
@@ -36,18 +37,28 @@ list)
 call)
 	case "$2" in
 	slots)
-		exec "$FW" info -j
+		# RAX1800Z: describe the real A/B layout.  Slot A (mtd2 kernel +
+		# mtd3 rootfs) is where OpenWrt runs; slot B (mtd4/mtd5) is the
+		# hardware read-only vendor fallback.  BootPara BootImageNum in mtd8
+		# selects which kernel U-Boot loads (0=A, 1=B).
+		bn=$(dd if=/dev/mtd8 bs=1 skip=0 count=2048 2>/dev/null | tr -d '\000' | grep -o 'BootImageNum=0x[0-9a-fA-F]*' | head -1)
+		next=$([ "${bn##*=}" = "0x00000000" ] && echo 0 || echo 1)
+		printf '{"running":%s,"next":%s,"slots":[' "$next" "$next"
+		printf '{"slot":0,"valid":true,"version":"OpenWrt (AX, mtd2+mtd3)","build":"writable"},'
+		printf '{"slot":1,"valid":true,"version":"vendor stock (mtd4+mtd5)","build":"READ-ONLY rollback"}'
+		printf ']}\n'
 		;;
 	check)
 		printf '{"log":"%s"}' "$(esc /sbin/e2631-upgrade check)"
 		;;
 	switch)
 		needs_confirm || { printf '{"ok":false,"error":"not confirmed"}'; exit 0; }
-		out=$("$FW" switch 2>&1)
-		rc=$?
-		o=$(printf '%s' "$out" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk '{printf "%s\\n", $0}')
-		printf '{"ok":%s,"rc":%d,"output":"%s"}' \
-			"$([ $rc -eq 0 ] && echo true || echo false)" "$rc" "$o"
+		# RAX1800Z has no software slot-flip: e2631-fwslot cannot map this
+		# board, and slot B is hardware read-only anyway.  To run the vendor
+		# fallback one must change BootPara BootImageNum in mtd8 (normally done
+		# from U-Boot / TTL).  Refuse clearly instead of returning a bogus
+		# "success" that would leave the user believing the board switched.
+		printf '{"ok":false,"error":"This board (RAX1800Z) has no software slot switch. Slot B (mtd4/mtd5) is hardware read-only and kept as the permanent rollback. To boot the vendor system, set BootPara BootImageNum=1 in mtd8 from U-Boot/TTL. Do NOT use the E2631 switch command here."}'
 		;;
 	run)
 		needs_confirm || { printf '{"ok":false,"error":"not confirmed"}'; exit 0; }
