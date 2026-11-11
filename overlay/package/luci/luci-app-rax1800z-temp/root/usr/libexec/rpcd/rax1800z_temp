@@ -30,6 +30,16 @@ valid() {
 	printf '%s' "$v"
 }
 
+# "49°C" for a valid Celsius integer, "N/A" for null/empty - the same shape
+# the status-overview row renders, exposed as the reference router's
+# luci getTempInfo string format.
+fmt_deg() {
+	case "$1" in
+		null|'') printf 'N/A' ;;
+		*) printf '%s°C' "$1" ;;
+	esac
+}
+
 is_cpu_label() {
 	case "$1" in
 		*cpu*|*CPU*|*soc*|*SoC*|*SOC*|*tsens*|*TSENS*|*zxic*|*ZXIC*|*ddr*|*DDR*)
@@ -72,14 +82,46 @@ for h in /sys/class/hwmon/hwmon*/temp1_input; do
 	fi
 done
 
+# Compose the reference-router string:
+#   "CPU: 49°C, WiFi0: 51°C, WiFi1: 48°C"
+# The Wi-Fi slot count mirrors the frontend: at least two slots (the board
+# enumerates two mt76 chips), extra radios appended as WiFi2..; missing
+# sensors render as N/A, never as a made-up number.
+tempinfo() {
+	s="CPU: $(fmt_deg "$cpu")"
+	n=$wn
+	[ "$n" -lt 2 ] && n=2
+	# Split the "48,49" wifi list on commas without cut: with a single
+	# entry there is no delimiter, and `cut -s` would then drop the whole
+	# line. Positional params do the job in plain BusyBox sh.
+	IFS=,
+	set -- $wifi
+	unset IFS
+	i=0
+	while [ "$i" -lt "$n" ]; do
+		if [ "$i" -lt "$wn" ]; then
+			eval "w=\$$((i + 1))"
+			[ -n "$w" ] || w=null
+		else
+			w=null
+		fi
+		s="$s, WiFi$i: $(fmt_deg "$w")"
+		i=$((i + 1))
+	done
+	printf '%s' "$s"
+}
+
 case "$1" in
 list)
-	printf '{ "temps": {} }\n'
+	printf '{ "temps": {}, "getTempInfo": {} }\n'
 	;;
 call)
 	case "$2" in
 	temps)
 		printf '{"cpu":%s,"wifi":[%s],"wifi_count":%d}\n' "$cpu" "$wifi" "$wn"
+		;;
+	getTempInfo)
+		printf '{"tempinfo":"%s"}\n' "$(tempinfo)"
 		;;
 	*)
 		printf '{}\n'
