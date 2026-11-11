@@ -1,0 +1,15 @@
+msgid ""
+msgstr ""
+"Content-Type: text/plain; charset=UTF-8\n"
+
+msgid "Temperature"
+msgstr "温度信息"
+
+msgid "N/A"
+msgstr "不可用"
+
+msgid "CPU"
+msgstr "CPU"
+
+msgid "WiFi"
+msgstr "WiFi"

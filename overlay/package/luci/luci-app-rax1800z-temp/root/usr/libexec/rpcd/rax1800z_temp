@@ -1,0 +1,91 @@
+#!/bin/sh
+# Read-only temperature aggregator for the RAX1800Z status overview.
+#
+# rpcd shell-plugin protocol:
+#   $1=list             -> print the method table
+#   $1=call, $2=temps   -> print the JSON reply
+#
+# Only exported kernel sysfs files are read. All raw values are millidegree
+# Celsius:
+#   /sys/class/thermal/thermal_zoneX/temp  -> CPU / SoC thermal zone
+#   /sys/class/hwmon/hwmonX/temp1_input    -> mt7915 / mt7916 (mainline mt76)
+#
+# Every source is optional. A missing sensor is reported as JSON null so the
+# page shows "N/A" instead of inventing a number. No NAND writes, no ioctl,
+# no vendor register reads: this plugin cannot brick or reboot the board.
+#
+# BusyBox compatibility: no tr, no arrays, no bash-only expansions.
+
+valid() {
+	[ -r "$1" ] || return 1
+	v=$(cat "$1" 2>/dev/null) || return 1
+	case "$v" in
+		''|*[!0-9]*) return 1 ;;
+	esac
+	[ "$v" -gt 0 ] 2>/dev/null || return 1
+	[ "$v" -lt 150000 ] 2>/dev/null || return 1
+	printf '%s' "$v"
+}
+
+is_cpu_label() {
+	case "$1" in
+		*cpu*|*CPU*|*soc*|*SoC*|*SOC*|*tsens*|*TSENS*|*zxic*|*ZXIC*|*ddr*|*DDR*)
+			return 0 ;;
+	esac
+	return 1
+}
+
+is_wifi_label() {
+	case "$1" in
+		mt7915*|mt7916*|MT7915*|MT7916*|mt76*|MT76*|mt798*|MT798*)
+			return 0 ;;
+	esac
+	return 1
+}
+
+cpu=null
+for z in /sys/class/thermal/thermal_zone*/temp; do
+	[ -f "$z" ] || continue
+	m=$(valid "$z") || continue
+	t=$(cat "${z%/temp}/type" 2>/dev/null)
+	# WiFi chips register thermal zones too. Only a CPU/SoC-labelled zone
+	# may be shown as the CPU temperature.
+	is_cpu_label "$t" || continue
+	cpu=$((m / 1000))
+	break
+done
+
+wifi=''
+wn=0
+for h in /sys/class/hwmon/hwmon*/temp1_input; do
+	[ -r "$h" ] || continue
+	m=$(valid "$h") || continue
+	nm=$(cat "${h%/temp1_input}/name" 2>/dev/null)
+	if is_wifi_label "$nm"; then
+		wifi="${wifi:+$wifi,}$((m / 1000))"
+		wn=$((wn + 1))
+	elif [ "$cpu" = null ] && is_cpu_label "$nm"; then
+		cpu=$((m / 1000))
+	fi
+done
+
+case "$1" in
+list)
+	printf '{ "temps": {} }\n'
+	;;
+call)
+	case "$2" in
+	temps)
+		printf '{"cpu":%s,"wifi":[%s],"wifi_count":%d}\n' "$cpu" "$wifi" "$wn"
+		;;
+	*)
+		printf '{}\n'
+		;;
+	esac
+	;;
+*)
+	printf '{}\n'
+	;;
+esac
+
+exit 0

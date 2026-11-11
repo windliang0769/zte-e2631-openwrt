@@ -1,0 +1,10 @@
+{
+	"luci-app-rax1800z-temp": {
+		"description": "Grant read access to RAX1800Z board temperature sensors",
+		"read": {
+			"ubus": {
+				"rax1800z_temp": [ "temps" ]
+			}
+		}
+	}
+}
