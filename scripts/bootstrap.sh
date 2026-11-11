@@ -96,6 +96,38 @@ say "installing feed packages"
 ( cd "$E2631_TREE" && ./scripts/feeds install -a 2>&1 | grep -E "Ignoring|Installing" | tail -8 )
 [ -d "$E2631_TREE/package/feeds/packages" ] || die "feed install produced no package/feeds/packages"
 
+# ---- 3b. the luci-base ucode plugin: reference-router getTempInfo ----------
+# The RAX1800-Z user expects the exact upstream router command
+# `ubus call luci getTempInfo` returning {"tempinfo": "CPU: ..."}.
+# The luci object lives in luci-base's ucode rpcd plugin; the luci feed is
+# cloned from upstream master WITHOUT a pin, so replacing the whole file
+# would go stale on feed drift. Instead, append a method registration to
+# the existing methods object right before the plugin's contract exit line
+# `return { luci: methods };` - the file's stable shape - and refuse to
+# blind-patch when that line is missing or duplicated.  This runs HERE, after
+# the feeds exist (apply.sh runs before the feeds are cloned, and its first
+# attempt there was skipped silently, which the build then caught).
+LUCI_UCODE="$E2631_TREE/feeds/luci/modules/luci-base/root/usr/share/rpcd/ucode/luci"
+GETTEMP_SNIPPET="$E2631_KIT/overlay/feeds-luci/getTempInfo.uc"
+if [ -f "$LUCI_UCODE" ] && [ -f "$GETTEMP_SNIPPET" ]; then
+	if ! grep -q 'getTempInfo' "$LUCI_UCODE"; then
+		n=$(grep -c '^return { luci: methods };$' "$LUCI_UCODE" || true)
+		[ "$n" = 1 ] ||
+			die "luci ucode plugin: expected exactly one 'return { luci: methods };' exit line, found ${n:-0} - refusing to blind-patch"
+		{
+			grep -v '^return { luci: methods };$' "$LUCI_UCODE"
+			echo ""
+			cat "$GETTEMP_SNIPPET"
+			echo ""
+			echo 'return { luci: methods };'
+		} > "$LUCI_UCODE.tmp"
+		mv "$LUCI_UCODE.tmp" "$LUCI_UCODE"
+		say "luci getTempInfo: method appended to the luci-base ucode plugin"
+	fi
+fi
+grep -q 'methods.getTempInfo' "$LUCI_UCODE" 2>/dev/null ||
+	die "luci getTempInfo did not land in the luci-base ucode plugin - LuCI would lose the reference temperature API"
+
 # ---- 4. the seed config ----------------------------------------------------
 say "seeding .config from seed/e2631.config"
 cp "$E2631_KIT/seed/e2631.config" "$E2631_TREE/.config"
