@@ -303,6 +303,12 @@
 		 * ADC 755..756.  /soc is simple-bus with an empty ranges (1:1),
 		 * so this reg maps straight to physical 0x94100034.
 		 *
+		 * This window is INSIDE crm2's 0x94100000/0x1000 syscon, whose
+		 * clock driver has already requested the whole region - the
+		 * driver therefore maps with devm_of_iomap() (no second
+		 * request_mem_region), mirroring how the OEM tree nests this
+		 * node as crm2+0x34.
+		 *
 		 * kmod-rax1800z-thermal binds here and registers a hwmon
 		 * temp1_input.  The three OEM interrupts are threshold/selector
 		 * groups, not separate sensors - this driver polls, so none are
@@ -339,6 +345,23 @@
 				compatible = "zte,zx279128s-pcie-phy";
 				reg = <1>;
 				#phy-cells = <0>;
+			};
+
+			/*
+			 * SoC restart, straight from the base patch's topcrm
+			 * definition (026-...SoC-description.patch: offset 0x44,
+			 * mask/value 0x1) for the same ZX279128S die.  Without a
+			 * populated restart handler "reboot -f" only halts the
+			 * kernel and every U-Boot round trip needs a manual
+			 * power cycle.  Unverified on this board: if the write
+			 * misses the real reset register the board just stays
+			 * halted, which is no worse than the current halt.
+			 */
+			reboot {
+				compatible = "syscon-reboot";
+				offset = <0x44>;
+				mask = <0x1>;
+				value = <0x1>;
 			};
 		};
 	};

@@ -245,7 +245,16 @@ static int zx_ts_probe(struct platform_device *pdev)
 	if (!p)
 		return -ENOMEM;
 
-	p->base = devm_platform_ioremap_resource(pdev, 0);
+	/*
+	 * The 12-byte sensor window sits inside crm2's 0x94100000 syscon
+	 * (SoC dtsi: clock-controller@94100000, reg 0x94100000/0x1000), and
+	 * the crm2 clock driver has already requested that whole region -
+	 * devm_platform_ioremap_resource() here raced it and failed with
+	 * -EBUSY on v10 hardware. devm_of_iomap() maps the sub-window
+	 * without a second request_mem_region(), which is the standard
+	 * pattern for a register block claimed by a parent syscon driver.
+	 */
+	p->base = devm_of_iomap(dev, dev->of_node, 0, NULL);
 	if (IS_ERR(p->base))
 		return PTR_ERR(p->base);
 
