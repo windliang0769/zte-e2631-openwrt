@@ -92,7 +92,14 @@ define Device/cmcc_rax1800-z
   KERNEL_SIZE := 4992k
   KERNEL := kernel-bin | append-dtb | uImage none | check-size $$(KERNEL_SIZE)
   KERNEL_INITRAMFS := kernel-bin | append-dtb | uImage-ramboot
+  # The SoC temperature row is a two-package feature: the out-of-tree kmod
+  # (binds temp@94100034, exports hwmon temp1_input) and the LuCI status
+  # include + rpcd backend. Both are also pinned in the seed; naming them here
+  # makes the device definition self-contained even if make defconfig demotes
+  # a seed =y to =m. kmod-hwmon-core is a DEPENDS of the kmod.
   DEVICE_PACKAGES := kmod-mt7915e kmod-mt7915-firmware uboot-envtools \
+	kmod-rax1800z-thermal \
+	luci-app-rax1800z-temp luci-i18n-rax1800z-temp-zh-cn \
 	luci luci-i18n-base-zh-cn libustream-mbedtls
   IMAGES := sysupgrade.bin
   IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata

@@ -296,6 +296,25 @@
 / {
 	soc {
 		/*
+		 * SoC on-die temperature sensor.  The register window, the
+		 * four-step CFG pulse sequence and the non-linear calibration
+		 * were recovered from the OEM 4.1.25 kernel (temp_zx.c) and
+		 * verified on hardware: /proc/tempsensor reported 37..38 C at
+		 * ADC 755..756.  /soc is simple-bus with an empty ranges (1:1),
+		 * so this reg maps straight to physical 0x94100034.
+		 *
+		 * kmod-rax1800z-thermal binds here and registers a hwmon
+		 * temp1_input.  The three OEM interrupts are threshold/selector
+		 * groups, not separate sensors - this driver polls, so none are
+		 * listed.  No clocks: dmesg showed "work clock 0".
+		 */
+		temp@94100034 {
+			compatible = "zxic,tempsensor";
+			reg = <0x94100034 0x0000000c>;
+			status = "okay";
+		};
+
+		/*
 		 * Second handle for the 0x94000000 block, same trick as the
 		 * E2631 port: the topcrm node is claimed by CLK_OF_DECLARE and
 		 * marked OF_POPULATED, so of_platform_bus_create refuses to

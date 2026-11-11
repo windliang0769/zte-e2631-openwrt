@@ -37,6 +37,30 @@ g_shell() {	# every helper in the kit has to parse
 	return $bad
 }
 
+g_temp_driver() {
+	# The temperature row depends on five separate files agreeing with each
+	# other. A missing DT node or a demoted seed line is invisible until the
+	# image boots, so assert the whole wiring before the 40-minute build.
+	local root=$E2631_KIT/overlay
+	local c=$root/package/kernel/rax1800z-thermal/src/rax1800z_thermal.c
+	local m=$root/package/kernel/rax1800z-thermal/Makefile
+	local d=$root/target/linux/sanechips/dts/zx279128r-cmcc-rax1800z.dts
+	local s=$E2631_KIT/seed/e2631.config
+	local i=$root/target/linux/sanechips/image/Makefile.e2631
+	local bad=0 f
+	for f in "$c" "$m" "$d" "$s" "$i"; do
+		[ -f "$f" ] || { echo "missing $f"; bad=1; }
+	done
+	[ "$bad" -eq 0 ] || return 1
+	grep -q 'zxic,tempsensor' "$c" || { echo "C: OF compatible missing"; bad=1; }
+	grep -q '"zxic_tsensor"' "$c" || { echo "C: hwmon name not matched by rpcd"; bad=1; }
+	grep -q '1550 \* avg' "$c" || { echo "C: OEM conversion constant missing"; bad=1; }
+	grep -q 'temp@94100034' "$d" || { echo "DTS: temp node missing"; bad=1; }
+	grep -q '^CONFIG_PACKAGE_kmod-rax1800z-thermal=y' "$s" || { echo "seed: kmod not selected"; bad=1; }
+	grep -q 'kmod-rax1800z-thermal' "$i" || { echo "image: kmod missing from DEVICE_PACKAGES"; bad=1; }
+	return "$bad"
+}
+
 g_js() {
 	e2631_need_cmd node "check the JavaScript tools" || return 77
 	local bad=0 f
@@ -106,6 +130,7 @@ g_apply() {
 run "upgrade failure paths (python)" g_upgrade
 run "apply.sh fail-fast + structural assertions" g_apply
 run "shell syntax (bash -n)" g_shell
+run "temperature driver wiring" g_temp_driver
 run "javascript (node --check)" g_js
 run "device scripts (busybox ash)" g_ash
 run "slot tool (-Werror, parse, reject)" g_slot_tool

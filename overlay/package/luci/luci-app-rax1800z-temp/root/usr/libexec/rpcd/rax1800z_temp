@@ -8,7 +8,10 @@
 # Only exported kernel sysfs files are read. All raw values are millidegree
 # Celsius:
 #   /sys/class/thermal/thermal_zoneX/temp  -> CPU / SoC thermal zone
-#   /sys/class/hwmon/hwmonX/temp1_input    -> mt7915 / mt7916 (mainline mt76)
+#   /sys/class/hwmon/hwmonX/temp1_input    -> zxic_tsensor (kmod-rax1800z-thermal)
+#                                            and mt7915 / mt7916 (mainline mt76)
+# The hwmon name filter below matches *zxic* for the SoC sensor, so the CPU
+# number appears as soon as that kmod is loaded - no frontend change needed.
 #
 # Every source is optional. A missing sensor is reported as JSON null so the
 # page shows "N/A" instead of inventing a number. No NAND writes, no ioctl,
