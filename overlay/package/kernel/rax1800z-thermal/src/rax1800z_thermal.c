@@ -239,6 +239,7 @@ static int zx_ts_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct zx_ts_priv *p;
 	struct device *hwmon;
+	struct resource *res;
 	int i, ret;
 
 	p = devm_kzalloc(dev, sizeof(*p), GFP_KERNEL);
@@ -248,15 +249,23 @@ static int zx_ts_probe(struct platform_device *pdev)
 	/*
 	 * The 12-byte sensor window sits inside crm2's 0x94100000 syscon
 	 * (SoC dtsi: clock-controller@94100000, reg 0x94100000/0x1000), and
-	 * the crm2 clock driver has already requested that whole region -
-	 * devm_platform_ioremap_resource() here raced it and failed with
-	 * -EBUSY on v10 hardware. devm_of_iomap() maps the sub-window
-	 * without a second request_mem_region(), which is the standard
-	 * pattern for a register block claimed by a parent syscon driver.
+	 * the crm2 clock driver has already requested that whole region.
+	 * devm_ioremap_resource() and devm_of_iomap() BOTH call
+	 * devm_request_mem_region() internally - v10 got -EBUSY from the
+	 * former and v11 from the latter, with the identical
+	 * "can't request region for resource" dev_err_probe print from
+	 * lib/devres.c.  devm_ioremap() is the managed map WITHOUT the
+	 * region claim (lib/devres.c: "Managed ioremap().  Map is
+	 * automatically unmapped on driver detach."), which is the right
+	 * pattern for a sub-window of a region owned by the parent syscon.
+	 * It returns NULL on failure, not an ERR_PTR.
 	 */
-	p->base = devm_of_iomap(dev, dev->of_node, 0, NULL);
-	if (IS_ERR(p->base))
-		return PTR_ERR(p->base);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -EINVAL;
+	p->base = devm_ioremap(dev, res->start, resource_size(res));
+	if (!p->base)
+		return -ENOMEM;
 
 	mutex_init(&p->lock);
 	platform_set_drvdata(pdev, p);
