@@ -457,8 +457,8 @@ warn('cpu enable-method matches the string the compiled platsmp registers',
       // cnjn/zte-mesh). A missing kmod-veth means the sandbox cannot attach.
       ['zte-mesh', 'the sandboxed ZTE multiapd controller'],
       ['luci-app-zte-mesh', 'the LuCI page for the mesh controller'],
-      // v1.3: the board page (slots / online update / switch back to stock)
-      ['luci-app-e2631', 'the E2631 board page in LuCI'],
+      // RAX1800Z: the board page (A/B partition status / online sysupgrade)
+      ['luci-app-e2631', 'the RAX1800Z board page in LuCI (package id kept for compat)'],
       // v1.4: the WAN port page; /sbin/e2631-wanport itself comes from
       // base-files, so only the front end is a package.
       ['luci-app-e2631-wanport', 'the WAN port selection page in LuCI'],

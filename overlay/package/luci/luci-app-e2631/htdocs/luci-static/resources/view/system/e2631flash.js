@@ -244,8 +244,16 @@ return view.extend({
 					res[0].sha256sum ? E('li', {}, '%s: %s'.format(_('SHA256'), res[0].sha256sum)) : ''
 				]));
 
+				// RAX1800Z: platform_copy_config() is a deliberate no-op so that a
+				// clean squashfs boot keeps the compiled-in WiFi defaults. Settings
+				// can therefore never be preserved. Leave "keep" UNCHECKED and
+				// disabled: the option loop in handleSysupgradeConfirm then adds -n,
+				// matching what really happens on the board.
+				opts.keep[0].checked = false;
+				opts.keep[0].disabled = true;
 				body.push(E('p', {}, E('label', { 'class': 'btn' }, [
-					opts.keep[0], ' ', _('Keep settings and retain the current configuration')
+					opts.keep[0], ' ', _('Keep settings and retain the current configuration'),
+					' ', '（本板固定不保留，已禁用）'
 				])));
 
 				if (!is_valid || is_too_big)
@@ -264,24 +272,17 @@ return view.extend({
 						_('The uploaded image file does not contain a supported format. Make sure that you choose the generic image format for your platform.')
 					]));
 
-				if (!allow_backup) {
-					body.push(E('p', { 'class': 'alert-message' }, [
-						_('The uploaded firmware does not allow keeping current configuration.')
-					]));
-					opts.keep[0].disabled = true;
-				} else {
-					opts.keep[0].checked = true;
-
-					if (has_rootfs_data) {
-						body.push(E('p', {}, E('label', { 'class': 'btn' }, [
-							opts.skip_orig[0], ' ', _('Skip from backup files that are equal to those in /rom')
-						])));
-					}
-
-					body.push(E('p', {}, E('label', { 'class': 'btn' }, [
-						opts.backup_pkgs[0], ' ', _('Include in backup a list of current installed packages at /etc/backup/installed_packages.txt')
-					])));
-				};
+				// RAX1800Z never preserves settings (platform_copy_config is a no-op),
+				// so the keep checkbox stays disabled/unchecked above regardless of
+				// allow_backup, and the keep-only toggles (skip_orig -u, backup_pkgs -k)
+				// are never rendered. Explicitly force the keep-only options off so the
+				// confirm loop below cannot pass -u/-k/-n inconsistently.
+				opts.keep[0].checked = false;
+				opts.keep[0].disabled = true;
+				opts.skip_orig[0].checked = false;
+				opts.backup_pkgs[0].checked = false;
+				body.push(E('p', { 'class': 'alert-message' },
+					'本板（RAX1800Z）升级固定不保留配置：请升级前到「备份」页下载配置存档，升级后到「还原」页上传恢复。'));
 
 				const cntbtn = E('button', {
 					'class': 'btn cbi-button-action important',
@@ -437,17 +438,27 @@ return view.extend({
 		});
 
 		if (mtdblocks.length) {
-			o = s.option(form.SectionValue, 'actions', form.NamedSection, 'actions', 'actions', _('Save mtdblock contents'), _('Click "Save mtdblock" to download specified mtdblock file. (NOTE: THIS FEATURE IS FOR PROFESSIONALS! )'));
+			// RAX1800Z: this board's parallel NAND exposes /dev/mtdblockN, but the
+			// BLOCK layer reads fail with "I/O error" (measured live: root=/dev/mtdblock3
+			// spammed I/O errors; only the /dev/mtdN character devices read cleanly).
+			// handleBlock() downloads /dev/mtdblockN, so this button would hand the
+			// user a corrupt/empty dump. Disable it and explain rather than removing
+			// the section (which would leave the page looking incomplete). For a raw
+			// NAND image use U-Boot/TTL or a programmer, not this web page.
+			o = s.option(form.SectionValue, 'actions', form.NamedSection, 'actions', 'actions',
+				_('Save mtdblock contents'),
+				'RAX1800Z 使用并行 NAND：本板 /dev/mtdblockN 块设备读取会报 I/O error（只有 /dev/mtdN 字符设备可靠），网页 mtdblock 下载已禁用。需要原始分区镜像请用 U-Boot/TTL 或编程器整片备份；配置备份请用上方「生成存档」。');
 			ss = o.subsection;
 
 			o = ss.option(form.ListValue, 'mtdselect', _('Choose mtdblock'));
-
+			o.disabled = true;
 			for (var i = 0; i < mtdblocks.length; i += 2)
 				o.value(mtdblocks[i], mtdblocks[i+1]);
 
 			o = ss.option(form.Button, 'mtddownload', _('Download mtdblock'));
 			o.inputstyle = 'action important';
 			o.inputtitle = _('Save mtdblock');
+			o.disabled = true;   // RAX1800Z: /dev/mtdblockN reads fail - never offer it
 			o.onclick = L.bind(this.handleBlock, this, hostname);
 		}
 

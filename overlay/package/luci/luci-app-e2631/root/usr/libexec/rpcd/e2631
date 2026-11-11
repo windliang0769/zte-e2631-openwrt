@@ -1,5 +1,5 @@
 #!/bin/sh
-# rpcd backend for the E2631 board page, speaking the rpcd shell protocol
+# rpcd backend for the RAX1800Z board page, speaking the rpcd shell protocol
 # (see luci.zte-mesh for the reference implementation):
 #
 #   ubus call e2631 list   -> this script with $1="list": print the method table
