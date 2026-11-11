@@ -113,7 +113,13 @@ tempinfo() {
 
 case "$1" in
 list)
-	printf '{ "temps": {}, "getTempInfo": {} }\n'
+	# The only ubus method this plugin registers is "temps" (used by the
+	# status-overview include). The reference router's
+	# `ubus call luci getTempInfo` is provided by apply.sh's patch of the
+	# luci-base ucode plugin, which runs THIS FILE as an executable
+	# (`call getTempInfo` below) - that path never crosses ubus, so it is
+	# intentionally not listed here.
+	printf '{ "temps": {} }\n'
 	;;
 call)
 	case "$2" in

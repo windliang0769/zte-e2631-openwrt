@@ -166,6 +166,37 @@ if [ -f "$MT76" ]; then
 	echo "mt7915e autoload removed: e2631-wifi-eeprom owns the load order"
 fi
 
+# Add the reference router's `ubus call luci getTempInfo` to the standard
+# luci ubus object. The object lives in luci-base's ucode rpcd plugin; the
+# luci feed is cloned from upstream master WITHOUT a pin, so replacing the
+# whole file would go stale on the next feed drift. Instead, append a method
+# registration to the existing methods object right before the plugin's
+# contract exit line `return { luci: methods };`, which is the file's stable
+# shape, and refuse to blind-patch when that line is missing or duplicated.
+# The aggregation lives in /usr/libexec/rpcd/rax1800z_temp (luci-app-
+# rax1800z-temp); the ucode method calls it as a plain executable, so the
+# method degrades to a constant N/A if that package is not installed.
+LUCI_UCODE="$TREE/feeds/luci/modules/luci-base/root/usr/share/rpcd/ucode/luci"
+GETTEMP_SNIPPET="$HERE/overlay/feeds-luci/getTempInfo.uc"
+if [ -f "$LUCI_UCODE" ] && [ -f "$GETTEMP_SNIPPET" ]; then
+	if ! grep -q 'getTempInfo' "$LUCI_UCODE"; then
+		n=$(grep -c '^return { luci: methods };$' "$LUCI_UCODE" || true)
+		[ "$n" = 1 ] || {
+			echo "luci ucode plugin: expected exactly one 'return { luci: methods };' exit line, found ${n:-0} - refusing to blind-patch" >&2
+			exit 1
+		}
+		{
+			grep -v '^return { luci: methods };$' "$LUCI_UCODE"
+			echo ""
+			cat "$GETTEMP_SNIPPET"
+			echo ""
+			echo 'return { luci: methods };'
+		} > "$LUCI_UCODE.tmp"
+		mv "$LUCI_UCODE.tmp" "$LUCI_UCODE"
+		echo "luci getTempInfo: method appended to the luci-base ucode plugin"
+	fi
+fi
+
 # The target inherits cortex-a9 hard-float defaults; this SoC has no VFP at all.
 # Turn the option off together with everything that depends on it: leaving
 # CONFIG_VFPv3=y with VFP unset makes the kernel's syncconfig restart and then
@@ -389,6 +420,8 @@ assert "forced command line names a root device" grep -q '^CONFIG_CMDLINE=.*root
 assert "Denali parallel NAND driver enabled" grep -q '^CONFIG_MTD_NAND_DENALI_DT=y$' "$CFG"
 assert "mt7915e autoload removed from the mt76 package" \
 	bash -c "test -f '$MT76' && ! grep -q 'AutoProbe,mt7915e' '$MT76'"
+assert "luci getTempInfo appended to the luci-base ucode plugin" \
+	bash -c "test -f '$TREE/feeds/luci/modules/luci-base/root/usr/share/rpcd/ucode/luci' && grep -q 'methods.getTempInfo' '$TREE/feeds/luci/modules/luci-base/root/usr/share/rpcd/ucode/luci'"
 assert "VFP/NEON/Thumbee disabled in the target config" \
 	bash -c "! grep -qiE '^CONFIG_(VFP|VFPv3|NEON|KERNEL_MODE_NEON|ARM_THUMBEE)=y\$' '$CFG'"
 assert "lockup detectors flipped in the generic config" grep -q '^CONFIG_SOFTLOCKUP_DETECTOR=y' "$GEN"
