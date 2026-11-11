@@ -44,7 +44,11 @@ config wifi-iface 'default_radio0'
 	option device 'radio0'
 	option network 'lan'
 	option mode 'ap'
-	option ssid 'E2631'
+	# Factory-fallback SSID. "E2631" is the E2631 fallback kept for that
+	# board; "RAX1800Z" is this board's. Both are in e2631-wifi-boot's
+	# factory_wireless() blacklist, so provisioning still runs on top of
+	# either name.
+	option ssid 'RAX1800Z'
 	option encryption 'none'
 	option disabled '1'
 
@@ -52,6 +56,6 @@ config wifi-iface 'default_radio1'
 	option device 'radio1'
 	option network 'lan'
 	option mode 'ap'
-	option ssid 'E2631'
+	option ssid 'RAX1800Z'
 	option encryption 'none'
 	option disabled '1'

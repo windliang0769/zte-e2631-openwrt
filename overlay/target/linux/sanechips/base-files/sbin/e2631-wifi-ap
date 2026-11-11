@@ -44,7 +44,13 @@ if [ "${1:-}" = off ]; then
 	exit 0
 fi
 
-SSID=${1:-E2631-OpenWrt}
+# default open SSID follows the board the script runs on
+. /lib/functions.sh 2>/dev/null
+case "$(board_name 2>/dev/null)" in
+	cmcc,rax1800-z) DEF_SSID=RAX1800Z-OpenWrt ;;
+	*) DEF_SSID=E2631-OpenWrt ;;
+esac
+SSID=${1:-$DEF_SSID}
 KEY=${2:-}
 
 # gate 1 has to be done by hand or by autoload: a missing phy is not this script's job

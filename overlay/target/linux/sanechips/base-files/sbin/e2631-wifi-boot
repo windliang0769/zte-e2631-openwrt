@@ -32,6 +32,7 @@
 # hang stays open: if the box dies during firmware download, the power cycle
 # leaves the pending marker and the next boot retries (after RETRY s).
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
+. /lib/functions.sh   # board_name
 
 DEFER=${1:-25}
 RETRY=${RETRY:-120}
@@ -56,7 +57,12 @@ factory_ssid() {
 	tdev=""
 	for d in /sys/class/mtd/mtd[0-9]*; do
 		[ -r "$d/name" ] || continue
-		[ "$(cat "$d/name")" = "tag" ] || continue
+		# E2631 calls it "tag"; the RAX1800-Z factory record lives in
+		# "parameter-tags" (mtd6 in its 12-partition layout).
+		case "$(cat "$d/name")" in
+			tag|parameter-tags) ;;
+			*) continue ;;
+		esac
 		tdev=/dev/mtd${d##*/mtd}
 		break
 	done
@@ -89,7 +95,7 @@ factory_wireless() {
 	for s in $sections; do
 		ssid=$(uci -q get "$s.ssid")
 		case "$ssid" in
-			''|OpenWrt|E2631|E2631-OpenWrt|"$fssid"|"$fssid-5G") ;;
+			''|OpenWrt|E2631|E2631-OpenWrt|RAX1800Z|RAX1800Z-OpenWrt|"$fssid"|"$fssid-5G") ;;
 			*) return 1 ;;
 		esac
 		case "$(uci -q get "$s.encryption")" in
@@ -165,7 +171,10 @@ have_radios() {
 # wireless page".  Now a missing radio section provisions again; factory_wireless
 # still guarantees a user's own SSID/key/state is never rewritten.
 if { [ ! -e "$PROVISIONED" ] || ! have_radios; } && factory_wireless; then
-	SSID=$(factory_ssid) || SSID=E2631
+	SSID=$(factory_ssid) || case "$(board_name)" in
+		cmcc,rax1800-z) SSID=RAX1800Z ;;
+		*) SSID=E2631 ;;
+	esac
 	# First boot provisions an OPEN network on purpose (2026-10-24 decision):
 	# no Wi-Fi key and no root/admin password are preset - the user sets both.
 	log "first boot: open network $SSID (no password)"

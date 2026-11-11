@@ -49,6 +49,37 @@ zte_caldata_from_jffs2() {
 	rmdir $dir
 }
 
+# The RAX1800-Z keeps its MT7915D calibration as "MT7915_EEPROM.bin" in the
+# JFFS2 of the "wlan" partition (recovered read-only from the full NAND dump:
+# 3778 bytes, first two bytes 15 79 = chip id 0x7915, size matches
+# INDEX0_EEPROM_size=0xEC2 in l1profile_7915_dual.dat).  The driver memcpy()s
+# MT7915_EEPROM_SIZE (3584 = 0xE00) bytes out of it (mt7915/mt7915.h), so
+# handing exactly that is both sufficient and what the driver consumes.
+rax1800z_caldata_from_jffs2() {
+	local part dir=/tmp/wifi-caldata id
+
+	part=$(find_mtd_part wlan)
+	[ -n "$part" ] || caldata_die "no mtd device found for partition wlan"
+
+	mkdir -p $dir
+	# Same double-fire guard as the E2631 path below: reuse an existing
+	# mount instead of dying on "Resource busy".
+	if ! grep -qs " $dir " /proc/mounts; then
+		mount -t jffs2 $part $dir || caldata_die "failed to mount $part"
+	fi
+	id=$(hexdump -v -n 2 -e '2/1 "%02x"' $dir/MT7915_EEPROM.bin 2>/dev/null)
+	case "$board:$id" in
+	cmcc,rax1800-z:1579)
+		caldata_from_file $dir/MT7915_EEPROM.bin 0x0 0xe00
+		;;
+	*)
+		echo "caldata: chip id $id in $part is not this board's Wi-Fi chip"
+		;;
+	esac
+	umount $dir
+	rmdir $dir
+}
+
 board=$(board_name)
 
 case "$FIRMWARE" in
@@ -59,10 +90,17 @@ case "$FIRMWARE" in
 # answers 0x7916 - so "mt7916_eeprom.bin" is the name this board is asked for,
 # not the mt7915 one. Both names are accepted because the request also carries
 # no band information: the main function (14c3:7906) and the ext-HIF function
-# (14c3:790a) ask for the same file.
+# (14c3:790a) ask for the same file.  The RAX1800-Z asks for the mt7915 names
+# (its card answers 0x7915; mt7915_eeprom_name() consults dbdc_support, which
+# is still 0 at the pre-firmware request, so the plain name is what it asks
+# for - the dbdc name is staged too, in case a future mt76 reloads it after
+# the MCU reports the band config).
 	case "$board" in
 	zte,zxhn-h3600|zte,zxhn-e2631)
 		zte_caldata_from_jffs2
+		;;
+	cmcc,rax1800-z)
+		rax1800z_caldata_from_jffs2
 		;;
 	esac
 	;;

@@ -1,39 +1,81 @@
 #!/bin/sh
-# Bring up the MT7916 outside the boot-critical path.
+# Bring the Wi-Fi card up outside the boot-critical path.
 #
 # Called by /etc/init.d/e2631-wifi-load (START=95) with a delay, or by hand.
-# Rationale, measured on this board: the stall that used to eat boots always sat
+# Rationale, measured on the E2631: the stall that used to eat boots always sat
 # inside rc.d (console dies right after "WA Firmware Version", during the
 # firmware DMA window), so keeping the load out of rc.d means a stall can no
 # longer keep ssh from coming up. That is a recovery property, not a cure: on
-# three cold boots of this image a hand-run bind at up=251 hung, at up=336
+# three cold boots of that image a hand-run bind at up=251 hung, at up=336
 # worked, at up=307 hung, so the first download after a power cycle is still
 # roughly one success in three whatever moment it is attempted at.
 #
-# The bind order matters: with drivers_autoprobe restored first, the PCI core
-# grabs the ext-HIF (14c3:790a) itself and the main function then claims it as
-# hif2 -- the dual-HIF configuration that dies on the first client.
+# Two boards share this script; the differences live in the case below:
+#
+#   zte,zxhn-e2631  MT7916AN (14c3:7906 main + 14c3:790a ext-HIF on ONE card).
+#     The bind order matters: with drivers_autoprobe restored first, the PCI
+#     core grabs the ext-HIF itself and the main function then claims it as
+#     hif2 -- the dual-HIF configuration that dies on the first client.  So:
+#     autoprobe off, bind 0x7906, restore autoprobe, and 790a stays unbound.
+#
+#   cmcc,rax1800-z  MT7915D DBDC card (14c3:7915) on root port 0, answering
+#     chip id 0x7915, calibration "MT7915_EEPROM.bin" in the "wlan" partition
+#     (see 11-mt76-caldata).  mt76 requests "mediatek/mt7915_eeprom.bin"
+#     before firmware (dbdc_support is still 0 there) and reads
+#     MT7915_EEPROM_SIZE (0xE00) out of the blob.  The 14c3:7916 endpoint on
+#     root port 1 is an OEM echo companion with NO eeprom anywhere in flash
+#     (grep over the full 128 MiB dump finds zero "MT7916" strings) - mainline
+#     mt76 cannot drive an echo card, and staging a fake eeprom for it would
+#     feed wrong calibration into real hardware, so nothing is staged for it:
+#     its probe fails at the eeprom step, BEFORE any firmware DMA, which is
+#     the graceful outcome.  Bind 0x7915 with autoprobe off anyway, same
+#     recovery property as the E2631.
+#
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 DEFER=${1:-25}
 log() { echo "wifi-on: $*" > /dev/kmsg; }
 
+. /lib/functions.sh   # board_name
+
 log "waiting ${DEFER}s after boot before touching the card"
 sleep "$DEFER"
 
-fw=mediatek/mt7916_eeprom.bin
-[ -e "/lib/firmware/$fw" ] || FIRMWARE=$fw /etc/hotplug.d/firmware/11-mt76-caldata
-[ -e "/lib/firmware/$fw" ] || { log "no caldata staged, giving up"; exit 0; }
+board=$(board_name)
+case "$board" in
+cmcc,rax1800-z)
+	fws="mediatek/mt7915_eeprom.bin mediatek/mt7915_eeprom_dbdc.bin"
+	bind_id=0x7915
+	;;
+*)
+	fws="mediatek/mt7916_eeprom.bin"
+	bind_id=0x7906
+	;;
+esac
+
+for fw in $fws; do
+	[ -e "/lib/firmware/$fw" ] || FIRMWARE=$fw /etc/hotplug.d/firmware/11-mt76-caldata
+done
+staged=1
+for fw in $fws; do
+	[ -e "/lib/firmware/$fw" ] || staged=0
+done
+[ "$staged" = 1 ] || { log "no caldata staged, giving up"; exit 0; }
 
 echo 0 > /sys/bus/pci/drivers_autoprobe
 modprobe mt7915e || log "modprobe failed rc=$?"
 
 # bind the main function while autoprobe is still off
 for d in /sys/bus/pci/devices/*; do
-	[ "$(cat "$d/device" 2>/dev/null)" = "0x7906" ] || continue
+	[ "$(cat "$d/device" 2>/dev/null)" = "$bind_id" ] || continue
 	[ -e "$d/driver" ] && continue
 	log "binding ${d##*/}"
 	echo "${d##*/}" > /sys/bus/pci/drivers/mt7915e/bind
 done
 
 echo 1 > /sys/bus/pci/drivers_autoprobe
-log "done: 7906=$(basename "$(readlink /sys/bus/pci/devices/0000:01:00.0/driver)" 2>/dev/null || echo none) 790a=$(basename "$(readlink /sys/bus/pci/devices/0001:01:00.0/driver)" 2>/dev/null || echo none)"
+bound=""
+for d in /sys/bus/pci/devices/*; do
+	[ "$(basename "$(readlink "$d/driver" 2>/dev/null)")" = "mt7915e" ] && \
+		bound="$bound ${d##*/}"
+done
+log "done: mt7915e bound:$bound"
