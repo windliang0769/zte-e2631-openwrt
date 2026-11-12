@@ -140,7 +140,8 @@ ra_tar_member() {
 	tar -xOf "$tar" "$path" 2>/dev/null
 }
 
-ra_unpack() { # ra_unpack <image>  ->  $RA_TARDIR/{kernel,root,img.tar}	local img=$1
+ra_unpack() { # ra_unpack <image>  ->  $RA_TARDIR/{kernel,root,img.tar}
+	local img=$1
 	rm -rf "$RA_TARDIR"; mkdir -p "$RA_TARDIR"
 	# ra_get_image transparently gunzips a .tar.gz; normalise to a plain tar.
 	ra_get_image "$img" > "$RA_TARDIR/img.tar"
