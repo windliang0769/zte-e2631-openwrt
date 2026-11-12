@@ -1,0 +1,29 @@
+#!/bin/sh
+# v24 config snapshot: /etc/config -> mtd8 (usercfg) via char-device direct write.
+# mtdblock+jffs2 writeback proved unreliable on this NAND; char-device
+# writes (mtd erase + dd) are the only proven-reliable write path.
+# Layout: block0 = "V24CFGv1" magic + zero pad; block1.. = 4096-padded tar.gz
+MTD=/dev/mtd8
+MD5F=/tmp/.cfg_snap_last
+T=/tmp/cfg.tgz
+P=/tmp/cfg_pad.bin
+
+tar czf $T -C / etc/config 2>/dev/null || { echo "cfg-snapshot: tar failed"; exit 1; }
+H=$(md5sum $T | cut -d' ' -f1)
+if [ -f $MD5F ] && [ "$(cat $MD5F)" = "$H" ]; then
+    exit 0
+fi
+echo $H > $MD5F
+
+dd if=$T of=$P bs=4096 conv=sync 2>/dev/null
+
+mtd erase usercfg >/dev/null 2>&1
+
+printf 'V24CFGv1' > /tmp/cfg_hdr.bin
+dd if=/dev/zero bs=1 count=4088 2>/dev/null >> /tmp/cfg_hdr.bin
+dd if=/tmp/cfg_hdr.bin of=$MTD bs=4096 seek=0 2>/dev/null
+
+dd if=$P of=$MTD bs=4096 seek=1 2>/dev/null
+
+sync
+echo "cfg-snapshot: written to usercfg ($H)"

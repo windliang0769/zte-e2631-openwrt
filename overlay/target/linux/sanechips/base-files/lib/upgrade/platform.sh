@@ -105,6 +105,18 @@ ra_magic() { busybox hexdump -v -e '1/1 "%02x"' -n 4 "$1" 2>/dev/null; }
 
 ra_size() { wc -c < "$1" | tr -d ' \n'; }
 
+# Patch a little-endian u32 at <offset> inside <file> in place.  Used to
+# update the vendor version-header length fields for a NEW uImage size.
+ra_patch_le32() { # <file> <offset_dec> <value_dec>
+	local f=$1 off=$2 v=$3
+	printf "$(printf '\\x%02x\\x%02x\\x%02x\\x%02x' \
+		$(( v        & 255 )) \
+		$(( v >> 8   & 255 )) \
+		$(( v >> 16  & 255 )) \
+		$(( v >> 24  & 255 )))" \
+		| dd of="$f" bs=1 seek="$off" conv=notrunc 2>/dev/null
+}
+
 # Size of an mtd partition by label, in bytes (decimal, from sysfs).
 ra_mtd_size() {
 	local label=$1 m
@@ -128,8 +140,7 @@ ra_tar_member() {
 	tar -xOf "$tar" "$path" 2>/dev/null
 }
 
-ra_unpack() { # ra_unpack <image>  ->  $RA_TARDIR/{kernel,root,img.tar}
-	local img=$1
+ra_unpack() { # ra_unpack <image>  ->  $RA_TARDIR/{kernel,root,img.tar}	local img=$1
 	rm -rf "$RA_TARDIR"; mkdir -p "$RA_TARDIR"
 	# ra_get_image transparently gunzips a .tar.gz; normalise to a plain tar.
 	ra_get_image "$img" > "$RA_TARDIR/img.tar"
@@ -188,8 +199,27 @@ platform_do_upgrade() {
 	[ "$(ra_magic "$RA_TARDIR/kernel")" = "27051956" ] || { ra_v "bad kernel magic in ramfs"; exit 1; }
 
 	# Rebuild [480B vendor header][bare uImage] for `bootm 0x440001e0`.
+	# CRITICAL: the vendor header is the STOCK slot-A header; its field 0x058
+	# holds the OLD uImage size, and U-Boot's internal loader computes the
+	# NAND read length as mtd_length = [0x058] + 483 (verified live: a 5 MiB
+	# kernel with an unpatched header was still read as 0x353de0 bytes).  For
+	# any NEW uImage size L0 we must patch:
+	#   0x058 = L0            (the length the loader actually uses)
+	#   0x064 = L0            (Lr, informational)
+	#   0x068 = L0 + 483      (Lt = L0 + header, informational)
+	# The CRC fields (0x060/0x06c/0x110) belong to the vendor upgrade tools,
+	# which never run on OpenWrt; U-Boot's bootm integrity check uses the
+	# uImage's OWN header CRC (inside the uImage, not this wrapper).
+	local uimg_size=$RA_TARDIR/kernel size_l0
+	uimg_size=$(ra_size "$RA_TARDIR/kernel")
+	size_l0=$(( uimg_size + 0 ))
+	cp "$RA_VERHDR" "$RA_TARDIR/verhdr.patched"
+	ra_patch_le32 "$RA_TARDIR/verhdr.patched" 88  "$size_l0"          # 0x058
+	ra_patch_le32 "$RA_TARDIR/verhdr.patched" 100 "$size_l0"          # 0x064
+	ra_patch_le32 "$RA_TARDIR/verhdr.patched" 104 "$(( size_l0 + 483 ))" # 0x068
 	full=$RA_TARDIR/kernel.ra
-	cat "$RA_VERHDR" "$RA_TARDIR/kernel" > "$full"
+	cat "$RA_TARDIR/verhdr.patched" "$RA_TARDIR/kernel" > "$full"
+	ra_v "RAX1800Z: verhdr patched L0=$size_l0 (fields 0x058/0x064/0x068)"
 
 	# Rootfs FIRST, kernel LAST: the kernel is the boot switch, so a power cut
 	# leaves the shortest possible window with a half-written kernel.

@@ -1,0 +1,13 @@
+#!/bin/sh
+# v24 config restore: run from preinit, after 80_mount_root, before services.
+# If mtd8 (usercfg) block0 carries the V24CFGv1 magic, unpack the snapshot
+# over / so saved uci config survives reboot.
+do_restore_cfg() {
+    M=$(dd if=/dev/mtd8 bs=1 count=8 skip=0 2>/dev/null)
+    if [ "$M" = "V24CFGv1" ]; then
+        dd if=/dev/mtd8 bs=4096 skip=1 2>/dev/null | tar xzf - -C / && \
+            logger -s -t cfg-restore "uci config restored from usercfg"
+    fi
+}
+
+boot_hook_add preinit_main do_restore_cfg
