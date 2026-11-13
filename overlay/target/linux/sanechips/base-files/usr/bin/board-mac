@@ -1,20 +1,27 @@
 #!/bin/sh
-# v24: give every RAX1800Z its OWN factory MAC, read from its own flash.
+# v25: give every RAX1800Z its OWN factory MAC, read from its own flash.
 #
 # The image ships a baked MT7915 eeprom blob (the vendor "wlan" JFFS2 cannot
 # be mounted under mainline Denali ECC), and that blob carries the MACs of the
-# machine it was extracted from. Flashing the image into a second router would
-# otherwise give both boxes the same LAN MAC and WiFi BSSIDs.
+# machine it was extracted from.  Flashing the image into a second router
+# would otherwise give both boxes the same LAN MAC and WiFi BSSIDs.
 #
-# The vendor stores this unit's LAN MAC as the MAP ALID in the "wlan"
-# partition (1905d.cfg: map_controller_alid / map_agent_alid, e.g.
-# a8:61:df:a1:a9:e9). JFFS2 mounting fails wholesale here, but that ASCII
-# survives a raw read of the partition, so scan /dev/mtdN with strings(1) and
-# take the MAC-like token that is not one of the MTK / sample addresses.
+# This unit's identity lives in its own "wlan" partition raw bytes, in TWO
+# shapes depending on the unit (both observed in the fleet so far):
+#
+# 1. binary - the unit's MT7915_EEPROM.bin data node:  the blob starts
+#      15 79 00 00 <2.4G MAC:6> <5G MAC:6>
+#    with 5G = 2.4G + 1.  JFFS2 does not compress, so the bytes survive a raw
+#    partition read even where mounting fails wholesale.
+#      unit A: a8:61:df:a1:a9:ea / a8:61:df:a1:a9:eb
+#      unit B: ac:56:7b:ea:26:03 / ac:56:7b:ea:26:04
+# 2. text - the MAP ALID in 1905d.cfg (map_controller_alid = the LAN MAC,
+#    e.g. a8:61:df:a1:a9:e9 on unit A).  NOTE: some units ship a PLACEHOLDER
+#    here (00:0c:43:88:88:88 on unit B), so text is only a fallback, never
+#    authoritative.
+#
 # Family (exactly the vendor's assignment, also what the baked eeprom holds):
-#   LAN  = ALID        a8:61:df:a1:a9:e9
-#   2.4G = LAN + 1     a8:61:df:a1:a9:ea
-#   5G   = LAN + 2     a8:61:df:a1:a9:eb
+#   LAN  = 2.4G - 1    5G = 2.4G + 1
 #
 # Called from /etc/init.d/e2631-wifi-eeprom (S05), i.e. BEFORE the wifi
 # driver is bound at S95, so patching the eeprom blobs takes effect.
@@ -32,14 +39,55 @@ for d in /sys/class/mtd/mtd[0-9]*; do
 	break
 done
 
-# --- find this unit's LAN MAC ---
+# --- source 1 (authoritative): binary EEPROM signature scan ---
+# 15790000 + 24 hex chars (2.4G MAC then 5G MAC, 5-byte prefix equal,
+# last byte +1, unicast/nonzero first byte).  Most frequent hit wins.
 mac=""
+w2=""
 if [ -n "$dev" ]; then
+	w2=$(od -An -v -tx1 "$dev" 2>/dev/null | tr -d ' \n' | awk '
+		BEGIN {
+			for (j = 0; j < 256; j++)
+				if (j % 2 == 0 && j != 0 && j != 2 && j != 254)
+					ok[sprintf("%02x", j)] = 1
+			for (j = 0; j < 255; j++)
+				inc[sprintf("%02x%02x", j, j + 1)] = 1
+		}
+		{ s = s $0 }
+		END {
+			p = "15790000"; n = length(s)
+			pos = 1
+			while (1) {
+				k = index(substr(s, pos), p)
+				if (!k) break
+				k += pos - 1; pos = k + length(p)
+				if (k + length(p) + 24 > n + 1) break
+				m1 = substr(s, k + length(p), 12)
+				m2 = substr(s, k + length(p) + 12, 12)
+				key = substr(m1, 11, 2) substr(m2, 11, 2)
+				if (substr(m1, 1, 10) == substr(m2, 1, 10) &&
+				    (substr(m1, 1, 2) in ok) && (key in inc))
+					cnt[m1]++
+			}
+			best = ""; bc = 0
+			for (m in cnt) if (cnt[m] > bc) { bc = cnt[m]; best = m }
+			print best
+		}')
+	if [ -n "$w2" ]; then
+		h=$(echo "$w2" | tr -d ':')
+		num=$((0x$h))
+		mac=$(printf '%012x' $((num - 1)))
+		src=eeprom
+	fi
+fi
+
+# --- source 2 (fallback): text ALID scan, sample addresses excluded ---
+if [ -z "$mac" ] && [ -n "$dev" ]; then
 	mac=$(strings "$dev" 2>/dev/null |
 	      grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' |
 	      grep -viE '^(00:0c:43|00:41:71|00:00:00|ff:ff:ff|02:0c:43|06:0c:43|33:33:|01:00:5e)' |
 	      tr 'A-F' 'a-f' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
-	[ -n "$mac" ] && src=flash
+	[ -n "$mac" ] && src=alid
 fi
 
 # --- fallbacks: cached value, then a stable locally-administered MAC ---
