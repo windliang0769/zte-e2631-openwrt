@@ -21,15 +21,19 @@
 #   cmcc,rax1800-z  MT7915D DBDC card (14c3:7915) on root port 0, answering
 #     chip id 0x7915, calibration "MT7915_EEPROM.bin" in the "wlan" partition
 #     (see 11-mt76-caldata).  mt76 requests "mediatek/mt7915_eeprom.bin"
-#     before firmware (dbdc_support is still 0 there) and reads
-#     MT7915_EEPROM_SIZE (0xE00) out of the blob.  The 14c3:7916 endpoint on
-#     root port 1 is an OEM echo companion with NO eeprom anywhere in flash
-#     (grep over the full 128 MiB dump finds zero "MT7916" strings) - mainline
-#     mt76 cannot drive an echo card, and staging a fake eeprom for it would
-#     feed wrong calibration into real hardware, so nothing is staged for it:
-#     its probe fails at the eeprom step, BEFORE any firmware DMA, which is
-#     the graceful outcome.  Bind 0x7915 with autoprobe off anyway, same
-#     recovery property as the E2631.
+#     before firmware and reads MT7915_EEPROM_SIZE (0xE00) out of the blob.
+#     2026-11-13, root cause of "clients can see the SSID but never connect":
+#     the 14c3:7916 endpoint on root port 1 is NOT an echo card - it is the
+#     ext-HIF that mainline's mt7915_pci_init_hif2() looks for (0x7916 first,
+#     then 0x790a).  Leaving it unbound gives a driver with no hif2: beacons
+#     are transmitted, monitor-mode RX works (1386 frames / 10 s), but AP
+#     virtual interfaces never receive a single client management frame, so
+#     hostapd -dd logs no AUTH/ASSOC at all and phones retry then give up.
+#     With BOTH functions bound (mt7915e_hif claimed first, then mt7915e
+#     attaching it as hif2) a client associates immediately (verified: AID 1,
+#     -26 dBm, bidirectional traffic).  So on this board autoprobe stays ON
+#     and the PCI core binds both functions in module registration order.
+#     DO NOT apply the E2631 single-function workaround here.
 #
 PATH=/usr/sbin:/usr/bin:/sbin:/bin
 DEFER=${1:-25}
@@ -45,10 +49,12 @@ case "$board" in
 cmcc,rax1800-z)
 	fws="mediatek/mt7915_eeprom.bin mediatek/mt7915_eeprom_dbdc.bin"
 	bind_id=0x7915
+	dual_hif=1
 	;;
 *)
 	fws="mediatek/mt7916_eeprom.bin"
 	bind_id=0x7906
+	dual_hif=0
 	;;
 esac
 
@@ -61,21 +67,32 @@ for fw in $fws; do
 done
 [ "$staged" = 1 ] || { log "no caldata staged, giving up"; exit 0; }
 
-echo 0 > /sys/bus/pci/drivers_autoprobe
-modprobe mt7915e || log "modprobe failed rc=$?"
+if [ "$dual_hif" = 1 ]; then
+	# RAX1800-Z: both PCIe functions are required (see the header note).
+	# With autoprobe on, the module registers its hif driver first, the
+	# 0x7916 companion is claimed as mt7915e_hif, and the 0x7915 main
+	# function then attaches it as hif2 on its own probe.
+	echo 1 > /sys/bus/pci/drivers_autoprobe
+	modprobe mt7915e || log "modprobe failed rc=$?"
+	log "dual-hif bind requested for $board"
+else
+	echo 0 > /sys/bus/pci/drivers_autoprobe
+	modprobe mt7915e || log "modprobe failed rc=$?"
 
-# bind the main function while autoprobe is still off
-for d in /sys/bus/pci/devices/*; do
-	[ "$(cat "$d/device" 2>/dev/null)" = "$bind_id" ] || continue
-	[ -e "$d/driver" ] && continue
-	log "binding ${d##*/}"
-	echo "${d##*/}" > /sys/bus/pci/drivers/mt7915e/bind
-done
+	# bind the main function while autoprobe is still off
+	for d in /sys/bus/pci/devices/*; do
+		[ "$(cat "$d/device" 2>/dev/null)" = "$bind_id" ] || continue
+		[ -e "$d/driver" ] && continue
+		log "binding ${d##*/}"
+		echo "${d##*/}" > /sys/bus/pci/drivers/mt7915e/bind
+	done
 
-echo 1 > /sys/bus/pci/drivers_autoprobe
+	echo 1 > /sys/bus/pci/drivers_autoprobe
+fi
 bound=""
 for d in /sys/bus/pci/devices/*; do
-	[ "$(basename "$(readlink "$d/driver" 2>/dev/null)")" = "mt7915e" ] && \
-		bound="$bound ${d##*/}"
+	case "$(basename "$(readlink "$d/driver" 2>/dev/null)")" in
+	mt7915e|mt7915e_hif) bound="$bound ${d##*/}" ;;
+	esac
 done
 log "done: mt7915e bound:$bound"
