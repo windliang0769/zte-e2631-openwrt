@@ -1,6 +1,12 @@
 #!/bin/sh /etc/rc.common
 # Stage the MT7916 calibration at boot; do NOT load the driver here.
 #
+# v24: this is also where per-board identity is settled. board-mac reads the
+# unit's own factory MAC from its "wlan" partition and patches the baked
+# eeprom blobs, and board-defaults applies the factory LAN IP / root password.
+# Both MUST run before the wifi driver is bound (S95) - patching the eeprom
+# after the driver has read it would have no effect.
+#
 # History of this file, because each step was paid for in power cycles:
 #  1) caldata only lived in the jffs2 "wifi" partition while the driver asks for
 #     /lib/firmware/mediatek/mt7916_eeprom.bin, so Wi-Fi never came up until that
@@ -22,6 +28,10 @@
 START=05
 
 start() {
+	# Settle this unit's MAC / factory defaults before the wifi driver binds.
+	[ -f /usr/bin/board-mac ] && sh /usr/bin/board-mac
+	[ -f /usr/bin/board-defaults ] && sh /usr/bin/board-defaults
+
 	local fw=mediatek/mt7916_eeprom.bin
 
 	if [ ! -e "/lib/firmware/$fw" ]; then

@@ -1,0 +1,97 @@
+#!/bin/sh
+# v24: give every RAX1800Z its OWN factory MAC, read from its own flash.
+#
+# The image ships a baked MT7915 eeprom blob (the vendor "wlan" JFFS2 cannot
+# be mounted under mainline Denali ECC), and that blob carries the MACs of the
+# machine it was extracted from. Flashing the image into a second router would
+# otherwise give both boxes the same LAN MAC and WiFi BSSIDs.
+#
+# The vendor stores this unit's LAN MAC as the MAP ALID in the "wlan"
+# partition (1905d.cfg: map_controller_alid / map_agent_alid, e.g.
+# a8:61:df:a1:a9:e9). JFFS2 mounting fails wholesale here, but that ASCII
+# survives a raw read of the partition, so scan /dev/mtdN with strings(1) and
+# take the MAC-like token that is not one of the MTK / sample addresses.
+# Family (exactly the vendor's assignment, also what the baked eeprom holds):
+#   LAN  = ALID        a8:61:df:a1:a9:e9
+#   2.4G = LAN + 1     a8:61:df:a1:a9:ea
+#   5G   = LAN + 2     a8:61:df:a1:a9:eb
+#
+# Called from /etc/init.d/e2631-wifi-eeprom (S05), i.e. BEFORE the wifi
+# driver is bound at S95, so patching the eeprom blobs takes effect.
+# Idempotent and safe on every boot; never overwrites a user-set macaddr.
+
+CACHE=/etc/board-mac
+FWDIR=/lib/firmware/mediatek
+log() { echo "board-mac: $*" > /dev/kmsg; }
+
+# --- locate the "wlan" mtd character device ---
+dev=""
+for d in /sys/class/mtd/mtd[0-9]*; do
+	[ "$(cat "$d/name" 2>/dev/null)" = "wlan" ] || continue
+	dev=/dev/${d##*/}
+	break
+done
+
+# --- find this unit's LAN MAC ---
+mac=""
+if [ -n "$dev" ]; then
+	mac=$(strings "$dev" 2>/dev/null |
+	      grep -oE '([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}' |
+	      grep -viE '^(00:0c:43|00:41:71|00:00:00|ff:ff:ff|02:0c:43|06:0c:43|33:33:|01:00:5e)' |
+	      tr 'A-F' 'a-f' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
+	[ -n "$mac" ] && src=flash
+fi
+
+# --- fallbacks: cached value, then a stable locally-administered MAC ---
+if [ -z "$mac" ] && [ -f "$CACHE" ]; then
+	mac=$(cat "$CACHE")
+	src=cache
+fi
+if [ -z "$mac" ]; then
+	u=$(cat /proc/sys/kernel/random/uuid | tr -d '-')
+	mac="02:$(echo "$u" | cut -c1-2):$(echo "$u" | cut -c3-4):$(echo "$u" | cut -c5-6):$(echo "$u" | cut -c7-8):$(echo "$u" | cut -c9-10)"
+	src=generated
+	log "WARNING: no factory MAC readable from $dev; generated $mac"
+fi
+[ "$mac" = "$(cat "$CACHE" 2>/dev/null)" ] || echo "$mac" > "$CACHE"
+
+# --- derive the WiFi MACs as 12-hex-digit strings ---
+h=$(echo "$mac" | tr -d ':')
+num=$((0x$h))
+w2=$(printf '%012x' $((num + 1)))
+w5=$(printf '%012x' $((num + 2)))
+
+tobytes() { echo "$1" | sed 's/../& /g'; }
+
+# --- patch the baked eeprom blobs in place (only the 12 MAC bytes) ---
+for ee in "$FWDIR/mt7915_eeprom.bin" "$FWDIR/mt7915_eeprom_dbdc.bin"; do
+	[ -f "$ee" ] || continue
+	tmp=/tmp/board-mac.$$
+	cp -f "$ee" "$tmp" || continue
+	off=4
+	for b in $(tobytes "$w2") $(tobytes "$w5"); do
+		oct=$(printf '%03o' "0x$b")
+		printf "\\$oct" | dd of="$tmp" bs=1 seek=$off conv=notrunc 2>/dev/null
+		off=$((off + 1))
+	done
+	if ! cmp -s "$tmp" "$ee"; then
+		cp -f "$tmp" "$ee"
+		log "patched ${ee##*/}: 2.4G=$w2 5G=$w5"
+	fi
+	rm -f "$tmp"
+done
+
+# --- br-lan identity (Windows NLA fingerprints the gateway MAC) ---
+# The flash value is authoritative: a stale config snapshot restored at
+# preinit could otherwise carry another unit's MAC into this box.
+if [ "$(uci -q get network.@device[0].name)" = "br-lan" ]; then
+	cur=$(uci -q get network.@device[0].macaddr)
+	if [ "$cur" != "$mac" ]; then
+		uci set network.@device[0].macaddr="$mac"
+		uci commit network
+		log "br-lan macaddr=$mac (was ${cur:-unset})"
+	fi
+fi
+
+log "ready: lan=$mac 2.4G=$w2 5G=$w5 (source=$src)"
+exit 0

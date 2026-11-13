@@ -1,0 +1,38 @@
+#!/bin/sh
+# v24 factory defaults for a freshly flashed RAX1800Z.
+#
+# Only touches values that are STILL at their upstream defaults, so a user's
+# own LAN subnet or root password is never overwritten (including across a
+# config-preserving sysupgrade). Called from /etc/init.d/e2631-wifi-eeprom
+# (S05), when /etc/config/network and /etc/shadow already exist.
+
+. /lib/functions.sh
+
+[ "$(board_name)" = "cmcc,rax1800-z" ] || exit 0
+[ -f /etc/config/network ] && [ -f /etc/shadow ] || exit 1
+
+log() { echo "board-defaults: $*" > /dev/kmsg; }
+
+# --- LAN subnet: 192.168.10.1/24 ---
+case "$(uci -q get network.lan.ipaddr)" in
+192.168.1.1|192.168.1.1/24)
+	uci set network.lan.ipaddr="192.168.10.1/24"
+	uci commit network
+	log "lan ipaddr=192.168.10.1/24"
+	;;
+esac
+
+# --- root password: jia80128 ---
+# SHA-512 crypt hash embedded here; no plaintext password in the image.
+# OpenWrt ships "root::0:0:99999:7:::" (empty password) by default.
+ROOT_HASH='$6$eLrTNkgcFycn0vGg$t1nQZQ52yXeqAj8/QMm3pJwhLnJVYTnvIkEJOtITXXkpMWYJeRorPE5XRjCd5nF2kAuOE3tb8l8kl.bf3bh3F1'
+if grep -q '^root::' /etc/shadow; then
+	awk -v h="$ROOT_HASH" \
+	    'NR==1 { sub(/^root:[^:]*:/, "root:" h ":") } { print }' \
+	    /etc/shadow > /tmp/shadow.new &&
+	chmod 600 /tmp/shadow.new &&
+	mv -f /tmp/shadow.new /etc/shadow &&
+	log "root password set"
+fi
+
+exit 0
