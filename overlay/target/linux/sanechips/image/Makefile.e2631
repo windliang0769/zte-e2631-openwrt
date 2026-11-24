@@ -84,6 +84,22 @@ endef
 # rollback path - no image written by this definition ever touches it.
 # The stock U-Boot boots a plain legacy uImage and passes no DTB, so the
 # kernel is comp=0 with the DTB appended (CONFIG_ARM_APPENDED_DTB).
+# Unit B of the two-RAX1800-Z fleet has a marginal NAND erase block at flash
+# 0x1840000 (rootfs_data erase block 7, split offset 0xe0000): writes appear
+# to succeed, reads come back ECC-corrupted, and jffs2 never marks the block
+# bad - so the overlay randomly fails to mount at boot (tmpfs fallback,
+# config loss, hw offload coming back).  Copy the squashfs image, extend it
+# by 1 MiB (erase-aligned) and rewrite the superblock bytes_used field:
+# mtdsplit_squashfs rounds bytes_used up to the erase block and places
+# rootfs_data at flash 0x1860000, past the bad block.  The padding is never
+# read back - squashfs only touches blocks referenced by its metadata - so
+# the marginal block ends up in dead space behind the squashfs and jffs2 can
+# never reach it.
+define Build/rax1800z-isolate-badblock
+	cp $(IMAGE_ROOTFS) $(IMAGE_ROOTFS).iso
+	python3 -c 'import sys,struct; f=open(sys.argv[1],"r+b"); f.seek(0,2); n=(f.tell()+1048576+131071)//131072*131072; f.write(b"\0"*(n-f.tell())); f.seek(40); f.write(struct.pack("<Q",n)); f.close()' $(IMAGE_ROOTFS).iso
+endef
+
 define Device/cmcc_rax1800-z
   DEVICE_VENDOR := CMCC
   DEVICE_MODEL := RAX1800-Z
@@ -102,6 +118,8 @@ define Device/cmcc_rax1800-z
 	luci-app-rax1800z-temp luci-i18n-rax1800z-temp-zh-cn \
 	luci luci-i18n-base-zh-cn libustream-mbedtls
   IMAGES := sysupgrade.bin
-  IMAGE/sysupgrade.bin := sysupgrade-tar | append-metadata
+  # The badblock-isolate step produces a padded copy of the rootfs image;
+  # sysupgrade-tar must pack that copy, not the plain root.squashfs.
+  IMAGE/sysupgrade.bin := rax1800z-isolate-badblock | sysupgrade-tar rootfs=$$(IMAGE_ROOTFS).iso | append-metadata
 endef
 TARGET_DEVICES += cmcc_rax1800-z
