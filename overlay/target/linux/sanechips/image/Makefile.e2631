@@ -97,7 +97,7 @@ endef
 # the marginal block ends up in dead space behind the squashfs and jffs2 can
 # never reach it.
 define Build/rax1800z-isolate-badblock
-	python3 $$(TOPDIR)/target/linux/sanechips/isolate_badblock.py $$@
+	python3 $(TOPDIR)/target/linux/sanechips/isolate_badblock.py $@
 endef
 
 define Device/cmcc_rax1800-z
