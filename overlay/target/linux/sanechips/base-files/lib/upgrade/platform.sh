@@ -90,7 +90,11 @@ ra_v() { echo "sysupgrade: $*"; }
 # /sbin/mtd is the mtd-utils binary (not a busybox applet), so it must be
 # copied explicitly; tar/dd/cat/sha256sum are busybox applets already present
 # in the stage2 ramfs but listing them is harmless and guards minimal ramfs.
-RAMFS_COPY_BIN="/sbin/mtd /bin/tar /usr/bin/sha256sum /bin/dd /bin/cat"
+# RUN 32 LESSON: grep and head are NOT in the stage2 ramfs by default --
+# ra_tar_member() uses both and the upgrade aborted with "head: not found"
+# AFTER the board had already rebooted into stage2 (nothing was written, but
+# the board ended up parked at the U-Boot prompt).  List them explicitly.
+RAMFS_COPY_BIN="/sbin/mtd /bin/tar /usr/bin/sha256sum /bin/dd /bin/cat /bin/grep /usr/bin/head"
 RAMFS_COPY_DATA="/lib/upgrade/rax1800z.verhdr"
 
 RA_VERHDR=/lib/upgrade/rax1800z.verhdr
