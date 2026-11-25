@@ -144,7 +144,7 @@ ra_tar_member() {
 	tar -xOf "$tar" "$path" 2>/dev/null
 }
 
-ra_unpack() { # ra_unpack <image>  ->  $RA_TARDIR/{kernel,root,img.tar}
+ra_unpack() { # ra_unpack <image>  ->  $RA_TARDIR/{kernel,root,verhdr,img.tar}
 	local img=$1
 	rm -rf "$RA_TARDIR"; mkdir -p "$RA_TARDIR"
 	# ra_get_image transparently gunzips a .tar.gz; normalise to a plain tar.
@@ -152,6 +152,15 @@ ra_unpack() { # ra_unpack <image>  ->  $RA_TARDIR/{kernel,root,img.tar}
 	ra_tar_member "$RA_TARDIR/img.tar" kernel > "$RA_TARDIR/kernel" || return 1
 	ra_tar_member "$RA_TARDIR/img.tar" root   > "$RA_TARDIR/root"   || return 1
 	[ -s "$RA_TARDIR/kernel" ] && [ -s "$RA_TARDIR/root" ] || return 1
+	# v34+: the image ships a build-time patched vendor header with the
+	# correct length fields AND recomputed CRC at 0x110.  Fall back to the
+	# baked-in template for older images that lack this member.
+	if ra_tar_member "$RA_TARDIR/img.tar" verhdr.ready > "$RA_TARDIR/verhdr" 2>/dev/null \
+	   && [ "$(ra_magic "$RA_TARDIR/verhdr")" = "99999999" ]; then
+		touch "$RA_TARDIR/verhdr.ready.used"
+	else
+		cp "$RA_VERHDR" "$RA_TARDIR/verhdr"
+	fi
 	return 0
 }
 
@@ -218,13 +227,21 @@ platform_do_upgrade() {
 	local uimg_size=$RA_TARDIR/kernel size_l0
 	uimg_size=$(ra_size "$RA_TARDIR/kernel")
 	size_l0=$(( uimg_size + 0 ))
-	cp "$RA_VERHDR" "$RA_TARDIR/verhdr.patched"
-	ra_patch_le32 "$RA_TARDIR/verhdr.patched" 88  "$size_l0"          # 0x058
-	ra_patch_le32 "$RA_TARDIR/verhdr.patched" 100 "$size_l0"          # 0x064
-	ra_patch_le32 "$RA_TARDIR/verhdr.patched" 104 "$(( size_l0 + 483 ))" # 0x068
+	# ra_unpack() produced $RA_TARDIR/verhdr: either the build-time patched
+	# verhdr.ready (v34+, correct length fields AND CRC at 0x110) or, for
+	# legacy images, the baked-in template that needs the old runtime patch.
+	# For legacy images the CRC cannot be recomputed in the ramfs; keep the
+	# historical behaviour so they still flash (bootm path ignores it).
+	if [ -f "$RA_TARDIR/verhdr.ready.used" ]; then
+		ra_v "RAX1800Z: using build-time verhdr.ready (CRC precomputed)"
+	else
+		ra_patch_le32 "$RA_TARDIR/verhdr" 88  "$size_l0"          # 0x058
+		ra_patch_le32 "$RA_TARDIR/verhdr" 100 "$size_l0"          # 0x064
+		ra_patch_le32 "$RA_TARDIR/verhdr" 104 "$(( size_l0 + 483 ))" # 0x068
+		ra_v "RAX1800Z: legacy verhdr patched L0=$size_l0 (CRC not recomputed)"
+	fi
 	full=$RA_TARDIR/kernel.ra
-	cat "$RA_TARDIR/verhdr.patched" "$RA_TARDIR/kernel" > "$full"
-	ra_v "RAX1800Z: verhdr patched L0=$size_l0 (fields 0x058/0x064/0x068)"
+	cat "$RA_TARDIR/verhdr" "$RA_TARDIR/kernel" > "$full"
 
 	# Rootfs FIRST, kernel LAST: the kernel is the boot switch, so a power cut
 	# leaves the shortest possible window with a half-written kernel.

@@ -20,9 +20,31 @@ import io
 import struct
 import sys
 import tarfile
+import zlib
 
 EB = 0x20000      # NAND erase block size (128 KiB)
 PAD = 0x100000    # 1 MiB skip past the marginal block
+
+# Vendor kernel header (480 bytes) template baked into the rootfs.  At
+# runtime platform.sh used to patch the three length fields (0x058/0x064/
+# 0x068) for the actual uImage size but could NOT recompute the header CRC
+# at 0x110 (crc32(head[0x14:0x110])) in the sysupgrade ramfs -- no python /
+# zlib there.  U-Boot's do_mcupg then rejected the image with
+# "header crc error" and fell back to the (stale) stock slot.  Since this
+# build step is Python, prepare a fully patched header here and ship it as
+# an extra tar member; platform.sh uses it verbatim, no runtime CRC needed.
+def make_verhdr(kernel_size, template_path):
+    hdr = bytearray(open(template_path, "rb").read())
+    if len(hdr) != 480 or hdr[:4] != b"\x99\x99\x99\x99":
+        raise SystemExit("isolate-badblock: bad verhdr template")
+    struct.pack_into("<I", hdr, 0x058, kernel_size)         # L0 (loader length)
+    struct.pack_into("<I", hdr, 0x064, kernel_size)         # Lr
+    struct.pack_into("<I", hdr, 0x068, kernel_size + 483)   # Lt
+    struct.pack_into("<I", hdr, 0x110,
+                     zlib.crc32(hdr[0x14:0x110]) & 0xffffffff)
+    print("isolate-badblock: verhdr.ready L0=%d crc=0x%08x"
+          % (kernel_size, struct.unpack_from("<I", hdr, 0x110)[0]))
+    return bytes(hdr)
 
 def pad_root(data):
     if data[:4] != b"hsqs":
@@ -39,24 +61,41 @@ def pad_root(data):
           % (size, size, old, target))
     return bytes(buf)
 
-def main(path):
+def main(path, template_path):
     with tarfile.open(path) as t:
         members = t.getmembers()
         payloads = [(m, t.extractfile(m).read() if m.isfile() else None)
                     for m in members]
     out = io.BytesIO()
-    hit = False
+    hit = root_hit = False
+    kernel_size = None
+    prefix = None
     with tarfile.open(fileobj=out, mode="w", format=tarfile.GNU_FORMAT) as t:
         for m, blob in payloads:
             if m.isfile() and m.name.endswith("/root"):
                 blob = pad_root(blob)
                 m.size = len(blob)
+                root_hit = True
+            if m.isfile() and m.name.endswith("/kernel"):
+                kernel_size = len(blob)
+                prefix = m.name.rsplit("/", 1)[0]
+            if m.isfile() and m.name.endswith("/CONTROL"):
                 hit = True
             t.addfile(m, io.BytesIO(blob) if blob is not None else None)
-    if not hit:
-        raise SystemExit("isolate-badblock: no root member in sysupgrade tar")
+        if kernel_size is None or prefix is None:
+            raise SystemExit("isolate-badblock: no kernel member in sysupgrade tar")
+        # Add a fully pre-patched vendor header (length fields + CRC).  This
+        # avoids needing zlib in the sysupgrade ramfs at runtime.
+        vh = make_verhdr(kernel_size, template_path)
+        vm = tarfile.TarInfo(prefix + "/verhdr.ready")
+        vm.size = len(vh)
+        vm.mode = 0o644
+        t.addfile(vm, io.BytesIO(vh))
+    if not root_hit or not hit:
+        raise SystemExit("isolate-badblock: tar missing root or CONTROL member")
     with open(path, "wb") as f:
         f.write(out.getvalue())
 
 if __name__ == "__main__":
-    main(sys.argv[1])
+    # argv[2] = path to the 480-byte vendor header template in the build tree
+    main(sys.argv[1], sys.argv[2])
