@@ -1,0 +1,25 @@
+#!/bin/sh
+# Pure-AP fleet default (2026-11-25): the RAX1800Z units run as dumb APs
+# behind the main router, so the router-only services are switched off at
+# first boot of a fresh flash.  Everything here is idempotent and also
+# harmless on a config-preserving sysupgrade of an already-AP board.
+#
+# - firewall/fw4: no NAT, no port fwd, nothing to filter on a bridge.
+#   Killing it also means no nft ruleset and therefore no flowtable at all
+#   - the boot-time "flowtable appears at 45 s" race is gone by design.
+# - dnsmasq: disabled via UCI (NOT by removing the rc.d symlink - the
+#   2026-11-14 lesson: only the UCI knob survives every restore path).
+# - odhcpd: no DHCPv6/RA, the main router hands out leases.
+#
+# Kept ON purpose: uhttpd/dropbear/rpcd (management), wpad + e2631-wifi-*
+# (wireless), crond (cfg-snapshot every 10 min), e2631 board daemons,
+# packet_steering (RPS), uci-system/sysntpd.
+#
+# Re-enable any of them: /etc/init.d/<name> enable && /etc/init.d/<name> start
+/etc/init.d/firewall disable 2>/dev/null
+/etc/init.d/odhcpd disable 2>/dev/null
+uci -q set dhcp.@dnsmasq[0].disabled='1'
+uci -q commit dhcp
+
+echo "65_pure_ap: firewall/odhcpd disabled, dnsmasq uci-disabled" > /dev/kmsg
+exit 0

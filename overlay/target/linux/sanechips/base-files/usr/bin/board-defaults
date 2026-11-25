@@ -13,12 +13,20 @@
 
 log() { echo "board-defaults: $*" > /dev/kmsg; }
 
-# --- LAN subnet: 192.168.10.1/24 ---
+# --- LAN: pure-AP default, 192.168.0.88/24 behind the main router ---
+# The fleet runs as dumb APs on the 192.168.0.0/24 management subnet.
+# Static address, default route + DNS pointing at the main router so
+# opkg updates and NTP work.  Only fires while the address is still at
+# its upstream default (192.168.1.1), so a configured board (or one
+# restored from backup) is never touched, and factory reset lands back
+# here automatically because S05 runs on every boot.
 case "$(uci -q get network.lan.ipaddr)" in
 192.168.1.1|192.168.1.1/24)
-	uci set network.lan.ipaddr="192.168.10.1/24"
+	uci set network.lan.ipaddr="192.168.0.88/24"
+	uci set network.lan.gateway="192.168.0.1"
+	uci set network.lan.dns="192.168.0.1"
 	uci commit network
-	log "lan ipaddr=192.168.10.1/24"
+	log "lan=192.168.0.88/24 pure-AP gw/dns=192.168.0.1"
 	;;
 esac
 
