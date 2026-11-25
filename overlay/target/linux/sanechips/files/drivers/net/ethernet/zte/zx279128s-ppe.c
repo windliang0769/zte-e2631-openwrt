@@ -665,6 +665,19 @@ void zx_update_mac_tables(struct zx_eth_adapter *adapter)
  */
 static int zx_ppe_start(struct zx_eth_adapter *adapter)
 {
+	/* PPE hardware offload is permanently disabled on this platform.
+	 *
+	 * The start/stop cycle rewrites classifier extra-rules, ONU MAC
+	 * tables and trap registers, and the stop path does not fully
+	 * restore them: after one start->stop round the RX pipeline stays
+	 * poisoned - ARP/broadcast delivery breaks and RX interrupts can
+	 * freeze until power cycle (observed reproducibly).  This board
+	 * runs as a pure AP and gains nothing from hw offload, so refuse
+	 * every flowtable bind.  The nft flowtable object still binds but
+	 * remains software-only, which is inert here. */
+	return -EOPNOTSUPP;
+
+	{
 	static const u32 cmd = 0x00010000;
 	void __iomem *base = adapter->base;
 	int i, ret;
@@ -700,6 +713,7 @@ static int zx_ppe_start(struct zx_eth_adapter *adapter)
 	zx_update_traps(adapter);
 	dev_info(adapter->dev, "hardware flow offload enabled\n");
 	return 0;
+	}
 }
 
 static void zx_ppe_flush(void *ptr, void *arg)
